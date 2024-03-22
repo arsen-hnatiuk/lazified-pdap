@@ -18,7 +18,7 @@ def get_default_p(K: np.ndarray, y: np.ndarray) -> Callable:
 
 
 def get_default_g(alpha: float) -> Callable:
-    return lambda u: alpha * np.linalg.norm(u)
+    return lambda u: alpha * np.linalg.norm(u, ord=1)
 
 
 def get_default_Omega(K: np.ndarray) -> np.ndarray:

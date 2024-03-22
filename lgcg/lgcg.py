@@ -13,12 +13,8 @@ class LGCG:
     def __init__(
         self,
         M: float,
-        R: float,
-        theta: float,
         y_true: np.ndarray = None,
         K: np.ndarray = None,
-        f: Callable = None,
-        p: Callable = None,
         alpha: float = None,
         gamma: float = None,
         L: float = None,
@@ -26,19 +22,19 @@ class LGCG:
         Omega: np.ndarray = None,
     ) -> None:
         self.M = M
-        self.R = R
-        self.theta = theta
         self.y_true = y_true if not y_true is None else np.random.rand(5)
         self.K = K if not K is None else get_default_K(self.y_true)
-        self.f = f if not f is None else get_default_f(self.K, self.y_true)
-        self.p = p if not p is None else get_default_p(self.K, self.y_true)
+        self.f = get_default_f(self.K, self.y_true)
+        self.p = get_default_p(self.K, self.y_true)
         self.alpha = alpha if not alpha is None else 1
         self.g = get_default_g(self.alpha)
         self.gamma = gamma if not gamma is None else 1
         self.L = L if not L is None else 1
         self.norm_K_star = (
-            norm_K_star if not norm_K_star is None else np.linalg.norm(self.K, ord=1)
-        )
+            norm_K_star
+            if not norm_K_star is None
+            else max([np.linalg.norm(row) for row in np.transpose(self.K)])
+        )  # the 2,inf norm of the transpose of K
         self.Omega = Omega if not Omega is None else get_default_Omega(self.K)
         self.C = self.L * self.M**2
         self.j = lambda u: self.f(u) + self.g(u)
