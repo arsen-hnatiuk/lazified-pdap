@@ -58,16 +58,21 @@ class LGCG:
         support = np.array([])
         u = np.zeros(self.K.shape[1])
         p_u = self.p(u)
-        x = np.argmax(abs(p_u))
+        x = np.argmax(np.absolute(p_u))
         epsilon = self.j(u) / self.M
         Psi = self.gamma * self.alpha**2 / (4 * self.norm_K_star**2 * self.L**2)
         k = 1
         while self.Phi(p_u, u, x) > tol:
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
-            support_half = np.unique(
-                np.append(support, x).astype(int)
-            )  # returns sorted
+            Psi = min(Psi, self.M * epsilon)
+            if x in support:
+                support_half = support
+                Psi = Psi / 2
+            else:
+                support_half = np.unique(
+                    np.append(support, x).astype(int)
+                )  # returns sorted
             v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
             if self.explicit_Phi(p=p_u, u=u, v=v) >= self.M * epsilon:
                 u = (1 - eta) * u + eta * v
@@ -88,8 +93,6 @@ class LGCG:
                 u[pos] = u_raw[ind]
             p_u = self.p(u)
             x = np.argmax(np.absolute(p_u))
-            if x in support:
-                Psi = Psi / 2
             k += 1
             logging.info(
                 f"k:{k},  suppor:{support},  u_raw:{u_raw},  Ku:{np.matmul(self.K,u)}"
