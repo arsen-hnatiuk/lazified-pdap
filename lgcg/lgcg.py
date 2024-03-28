@@ -33,7 +33,7 @@ class LGCG:
         self.norm_K_star = (
             norm_K_star
             if not norm_K_star is None
-            else max([np.linalg.norm(row) for row in np.transpose(self.K)])
+            else np.max([np.linalg.norm(row) for row in np.transpose(self.K)])
         )  # the 2,inf norm of the transpose of K
         self.Omega = Omega if not Omega is None else get_default_Omega(self.K)
         self.C = self.L * self.M**2

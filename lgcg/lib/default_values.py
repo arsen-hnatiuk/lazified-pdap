@@ -14,7 +14,7 @@ def get_default_f(K: np.ndarray, y: np.ndarray) -> Callable:
 
 def get_default_p(K: np.ndarray, y: np.ndarray) -> Callable:
     # K_*(Ku-y)
-    return lambda u: np.matmul(np.transpose(K), np.matmul(K, u) - y)
+    return lambda u: -np.matmul(np.transpose(K), np.matmul(K, u) - y)
 
 
 def get_default_g(alpha: float) -> Callable:

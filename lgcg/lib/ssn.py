@@ -2,7 +2,8 @@
 
 import numpy as np
 import logging
-from lib.default_values import *
+from functools import lru_cache
+from default_values import *
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -21,15 +22,18 @@ class SSN:
         self.gamma_filter = 0.07
         self.g = get_default_g(self.alpha)
         self.f = get_default_f(self.K, self.y_true)
-        self.p = get_default_p(self.K, self.y_true)
-        self.gradient_p = np.matmul(np.transpose(self.K), self.K)
+        self.p_callable = get_default_p(self.K, self.y_true)  # -f'
+        self.second_derivative = np.matmul(np.transpose(self.K), self.K)
         self.j = lambda u: self.f(u) + self.g(u)
         self.L = 1
-        self.norm_K_star = max(
+        self.norm_K_star = np.max(
             [np.linalg.norm(row) for row in np.transpose(self.K)]
         )  # the 2,inf norm of the transpose of K
         self.gamma = 1
         self.M = M
+
+    def p(self, u: np.ndarray) -> np.ndarray:
+        return self.p_callable(u)
 
     def projector(self, u: np.ndarray, factor: float = 1) -> np.ndarray:
         # Projecion of an array onto [-alpha, alpha]
@@ -48,16 +52,10 @@ class SSN:
     def S(self, u: np.ndarray) -> np.ndarray:
         return u - self.projector(u, self.tau)
 
-    # def M(self, u: np.ndarray) -> np.ndarray:
-    #     # (I-D(u))H(u)+D(u)
-    #     pre_D = np.absolute(self.p(u) - u) <= self.alpha
-    #     D = np.diag(pre_D)
-    #     return np.matmul(np.eye(len(pre_D)) - D, self.gradient_p) + D
-
     def Psi(self, u: np.ndarray) -> np.ndarray:
         # sup_v <p(u),v-u>+g(u)-g(v)
         p = self.p(u)
-        constant_part = np.matmul(p, u) + self.g(u)
+        constant_part = -np.matmul(p, u) + self.g(u)
         variable_part = max(0, self.M * (np.max(np.absolute(p)) - self.alpha))
         return constant_part + variable_part
 
@@ -80,14 +78,7 @@ class SSN:
         u = u_0
         initial_j = self.j(u)
         filter = [self.theta(u)]
-
-        counter = 0
         while self.Psi(u) > tol or self.j(u) > initial_j:
-            counter += 1
-            if counter == 2:
-                break
-            logging.debug(f"Psi: {self.Psi(u)}")
-
             # Semismooth Newton step
             condition = np.absolute(-self.p(u) - u) > self.alpha
             cal_A = np.where(condition)[0]
@@ -95,28 +86,22 @@ class SSN:
             F_value = self.F(u)
             s_I = -self.tau * F_value[cal_I]
             s_A = np.linalg.lstsq(
-                self.gradient_p[np.ix_(cal_A, cal_A)]
+                self.second_derivative[np.ix_(cal_A, cal_A)]
                 + np.linalg.norm(F_value) * np.eye(len(cal_A)),
-                -F_value[cal_A] - np.matmul(self.gradient_p[np.ix_(cal_A, cal_I)], s_I),
+                -F_value[cal_A]
+                - np.matmul(self.second_derivative[np.ix_(cal_A, cal_I)], s_I),
                 rcond=None,
             )[0]
             s = np.zeros(len(u))
             s[cal_A] = s_A
             s[cal_I] = s_I
-            logging.debug(f"cal_A: {cal_A}")
-            logging.debug(f"cal_I: {cal_I}")
-            logging.debug(f"condition: {condition}")
-            logging.debug(f"SSN: {s}")
-            logging.debug(f"SSN step: {u + s}")
 
             # Check if filter accepts SSN step
             u_ssn = u + s
+            theta_snn = self.theta(u_ssn)
             accepted = True
-            logging.debug(f"filter: {filter}")
             for q in filter:
-                if np.max(q - self.theta(u_ssn)) < self.gamma_filter * np.max(
-                    self.theta(u_ssn)
-                ):
+                if np.max(q - theta_snn) < self.gamma_filter * np.max(theta_snn):
                     accepted = False
                     break
             if accepted:
@@ -125,9 +110,15 @@ class SSN:
                 continue
 
             # Global Armijo step
-            d = self.S(self.G(u))
+            d = self.S(self.G(u)) - u
             step_size = self.armijo(u, d)
             u = u + step_size * d
-            logging.debug(f"armijo step size: {step_size}")
-            logging.debug(f"armijo step: {u}")
         return u
+
+
+# if __name__ == "__main__":
+#     K = np.array([[-1, 2, 0], [3, 0, 0], [-1, -2, -1]])
+#     u = np.array([-1, -1, -1])
+#     y = np.array([1, 0, 4])
+#     sn = SSN(K, 1, y, 20)
+#     sn.solve(0.001, u)
