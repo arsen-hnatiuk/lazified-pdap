@@ -1,6 +1,5 @@
 import numpy as np
 import logging
-from typing import Callable
 from lib.default_values import *
 from lib.ssn import SSN
 
@@ -54,23 +53,24 @@ class LGCG:
             - np.matmul(p_u, u)
         )
 
-    def optimize(self, tol: float) -> dict:
+    def solve(self, tol: float) -> dict:
         support = np.array([])
         u = np.zeros(self.K.shape[1])
         p_u = self.p(u)
         x = np.argmax(np.absolute(p_u))
         epsilon = self.j(u) / self.M
-        Psi = self.gamma * self.alpha**2 / (4 * self.norm_K_star**2 * self.L**2)
-        k = 1
+        Psi = epsilon
+        k = 0
         while self.Phi(p_u, u, x) > tol:
+            k += 1
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             Psi = min(Psi, self.M * epsilon)
             if x in support:
-                support_half = support
+                support_extended = support
                 Psi = Psi / 2
             else:
-                support_half = np.unique(
+                support_extended = np.unique(
                     np.append(support, x).astype(int)
                 )  # returns sorted
             v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
@@ -83,17 +83,26 @@ class LGCG:
                 u = (1 - eta) * u
 
             # P_A step
-            K_support = self.K[:, support_half]
+            K_support = self.K[:, support_extended]
             ssn = SSN(K=K_support, alpha=self.alpha, y_true=self.y_true, M=self.M)
-            u_raw = ssn.solve(tol=Psi, u_0=u[support_half])
+            u_raw = ssn.solve(tol=Psi, u_0=u[support_extended])
 
-            support = support_half[u_raw != 0]
             u = np.zeros(len(u))
-            for ind, pos in enumerate(support):
+            for ind, pos in enumerate(support_extended):
                 u[pos] = u_raw[ind]
+            support = support_extended[
+                u_raw != 0
+            ]  # Possibly replace 0 by small precision
             p_u = self.p(u)
             x = np.argmax(np.absolute(p_u))
-            k += 1
-            logging.info(
-                f"k:{k},  suppor:{support},  u_raw:{u_raw},  Ku:{np.matmul(self.K,u)}"
-            )
+        logging.info(
+            f"LGCG converged in {k} iterations to tolerance {tol} with final sparsity of {len(support)}"
+        )
+        return {"u": u, "support": support}
+
+
+# if __name__ == "__main__":
+#     K = np.array([[-1, 2, 0], [3, 0, 0], [-1, -2, -1]])
+#     y = np.array([1, 0, 4])
+#     method = LGCG(M=20, y_true=y, K=K)
+#     method.solve(0.000001)

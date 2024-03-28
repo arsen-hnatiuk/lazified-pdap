@@ -3,7 +3,7 @@
 import numpy as np
 import logging
 from functools import lru_cache
-from default_values import *
+from lib.default_values import *
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -78,7 +78,10 @@ class SSN:
         u = u_0
         initial_j = self.j(u)
         filter = [self.theta(u)]
+        k = 0
         while self.Psi(u) > tol or self.j(u) > initial_j:
+            k += 1
+
             # Semismooth Newton step
             condition = np.absolute(-self.p(u) - u) > self.alpha
             cal_A = np.where(condition)[0]
@@ -113,6 +116,10 @@ class SSN:
             d = self.S(self.G(u)) - u
             step_size = self.armijo(u, d)
             u = u + step_size * d
+
+        logging.info(
+            f"SSN in {len(u)} dimensions converged in {k} iterations to tolerance {tol}"
+        )
         return u
 
 

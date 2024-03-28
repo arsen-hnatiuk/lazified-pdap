@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Union, Callable
+from typing import Callable
 
 
 def get_default_K(y: np.ndarray) -> np.ndarray:
