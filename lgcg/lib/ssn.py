@@ -12,25 +12,26 @@ logging.basicConfig(
 
 class SSN:
     def __init__(
-        self, K: np.ndarray, alpha: float, y_true: np.ndarray, M: float
+        self, K: np.ndarray, alpha: float, target: np.ndarray, M: float
     ) -> None:
         self.K = K
-        self.y_true = y_true
-        self.alpha = alpha
-        self.beta = 0.1
-        self.tau = 4
-        self.gamma_filter = 0.07
-        self.g = get_default_g(self.alpha)
-        self.f = get_default_f(self.K, self.y_true)
-        self.p_callable = get_default_p(self.K, self.y_true)  # -f'
-        self.second_derivative = np.matmul(np.transpose(self.K), self.K)
-        self.j = lambda u: self.f(u) + self.g(u)
-        self.L = 1
-        self.norm_K_star = np.max(
-            [np.linalg.norm(row) for row in np.transpose(self.K)]
-        )  # the 2,inf norm of the transpose of K
-        self.gamma = 1
-        self.M = M
+        if all(self.K.shape):
+            self.target = target
+            self.alpha = alpha
+            self.beta = 0.1
+            self.tau = 4
+            self.gamma_filter = 0.07
+            self.g = get_default_g(self.alpha)
+            self.f = get_default_f(self.K, self.target)
+            self.p_callable = get_default_p(self.K, self.target)  # -f'
+            self.second_derivative = np.matmul(np.transpose(self.K), self.K)
+            self.j = lambda u: self.f(u) + self.g(u)
+            self.L = 1
+            self.norm_K_star = np.max(
+                [np.linalg.norm(row) for row in np.transpose(self.K)]
+            )  # the 2,inf norm of K*
+            self.gamma = 1
+            self.M = M
 
     def p(self, u: np.ndarray) -> np.ndarray:
         return self.p_callable(u)
@@ -75,6 +76,9 @@ class SSN:
 
     def solve(self, tol: float, u_0: np.ndarray) -> np.ndarray:
         # Semismooth Newton method (globalized)
+        if not all(self.K.shape):
+            logging.debug("Empty input space, retuning u_0")
+            return u_0
         u = u_0
         initial_j = self.j(u)
         filter = [self.theta(u)]
@@ -117,8 +121,8 @@ class SSN:
             step_size = self.armijo(u, d)
             u = u + step_size * d
 
-        logging.info(
-            f"SSN in {len(u)} dimensions converged in {k} iterations to tolerance {tol}"
+        logging.debug(
+            f"SSN in {len(u)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
         )
         return u
 

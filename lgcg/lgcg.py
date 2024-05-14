@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+import time
 from typing import Callable
 from lib.default_values import *
 from lib.ssn import SSN
@@ -406,9 +407,13 @@ class LGCG_finite:
         K: np.ndarray,
         alpha: float = 1,
     ) -> None:
-        self.target = target
-        self.M = np.linalg.norm(self.target) ** 2  # value of j at initial u
-        self.K = K
+        self.K_norms = np.linalg.norm(K, axis=0)
+        self.K_transpose = np.array(
+            [row / norm for row, norm in zip(np.transpose(K), self.K_norms)]
+        )
+        self.K = np.transpose(self.K_transpose)
+        self.target_norm = np.linalg.norm(target)
+        self.target = target / self.target_norm
         self.f = get_default_f(self.K, self.target)
         self.p = get_default_p(self.K, self.target)
         self.alpha = alpha
@@ -417,8 +422,11 @@ class LGCG_finite:
         self.norm_K = np.max(
             [np.linalg.norm(row) for row in np.transpose(self.K)]
         )  # the 2,inf norm of K* = the 1,2 norm of K
-        self.C = 4 * self.L * self.M**2 * self.norm_K**2
         self.j = lambda u: self.f(u) + self.g(u)
+        self.M = (
+            self.j(np.zeros(self.K.shape[1])) / self.alpha
+        )  # Bound on the norm of iterates
+        self.C = 4 * self.L * self.M**2 * self.norm_K**2  # Smoothness constant
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
         return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
@@ -443,17 +451,18 @@ class LGCG_finite:
         epsilon = self.j(u) / self.M
         Psi = epsilon
         k = 1
-        while self.Phi(p_u, u, x) > tol:
+        Phi_value = self.Phi(p_u, u, x)
+        start_time = time.time()
+        ssn_time = 0
+        ssn_step_counter = 0
+        while Phi_value > tol:
+            u_old = u.copy()
+            Psi_old = Psi
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             Psi = min(Psi, self.M * epsilon)
             if x in support:
-                support_extended = support
                 Psi = Psi / 2
-            else:
-                support_extended = np.unique(
-                    np.append(support, x).astype(int)
-                )  # returns sorted
             v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
             if self.explicit_Phi(p=p_u, u=u, v=v) >= self.M * epsilon:
                 u = (1 - eta) * u + eta * v
@@ -463,24 +472,82 @@ class LGCG_finite:
             ):
                 u = (1 - eta) * u
 
-            # Low-dimensional step
+            if not np.array_equal(u, u_old) or Psi_old != Psi:
+                # Low-dimensional optimization
+                ssn_start = time.time()
+                support_extended = np.where(u != 0)[0]
+                K_support = self.K[:, support_extended]
+                ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
+                u_raw = ssn.solve(tol=Psi, u_0=u[support_extended])
+                ssn_time += time.time() - ssn_start
+
+                if not np.array_equal(u_raw, u[support_extended]):
+                    # SSN found a different solution
+                    ssn_step_counter += 1
+                    u = np.zeros(len(u))
+                    for ind, pos in enumerate(support_extended):
+                        u[pos] = u_raw[ind]
+                    support = support_extended[np.abs(u_raw) > 1e-11]
+                    p_u = self.p(u)
+                    x = np.argmax(np.absolute(p_u))
+                    Phi_value = self.Phi(p_u, u, x)
+
+            logging.info(
+                f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {support}, Psi {Psi:.3E}"
+            )
+            k += 1
+        logging.info(
+            f"LGCG converged in {k} iterations ({ssn_step_counter} SSN iterations) and {time.time()-start_time:.3f}s (SSN time {ssn_time:.3f}s) to tolerance {tol:.3E} with final sparsity of {len(support)}"
+        )
+        # Rescale the solution
+        for ind, pos in enumerate(self.K_norms):
+            u[ind] /= pos
+        u = u * self.target_norm
+
+        return {"u": u[support], "support": support}
+
+    def solve_exact(self, tol: float) -> dict:
+        support = np.array([])
+        u = np.zeros(self.K.shape[1])
+        p_u = self.p(u)
+        x = np.argmax(np.absolute(p_u))
+        k = 1
+        Phi_value = self.Phi(p_u, u, x)
+        start_time = time.time()
+        ssn_time = 0
+        while Phi_value > tol:
+            u_old = u.copy()
+            eta = 4 / (k + 3)
+            v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
+            u = (1 - eta) * u + eta * v
+
+            # Low-dimensional optimization
+            support_extended = np.where(u != 0)[0]
             K_support = self.K[:, support_extended]
+            ssn_start = time.time()
             ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
-            u_raw = ssn.solve(tol=Psi, u_0=u[support_extended])
+            u_raw = ssn.solve(tol=1e-11, u_0=u[support_extended])
+            ssn_time += time.time() - ssn_start
 
             u = np.zeros(len(u))
             for ind, pos in enumerate(support_extended):
                 u[pos] = u_raw[ind]
-            support = support_extended[
-                np.abs(u_raw) > 1e-11
-            ]  # Possibly replace 0 by small precision
+            support = support_extended[np.abs(u_raw) > 1e-11]
             p_u = self.p(u)
             x = np.argmax(np.absolute(p_u))
+            Phi_value = self.Phi(p_u, u, x)
+
+            logging.info(f"{k}: Phi {Phi_value:.3E}, support {support}")
             k += 1
         logging.info(
-            f"LGCG converged in {k} iterations to tolerance {tol} with final sparsity of {len(support)}"
+            f"LGCG converged in {k} iterations and {time.time()-start_time:.3f}s (SSN time {ssn_time:.3f}s) to tolerance {tol:.3E} with final sparsity of {len(support)}"
         )
-        return {"u": u, "support": support}
+        # Rescale the solution
+        for ind, pos in enumerate(self.K_norms):
+            u[ind] /= pos
+        u = u * self.target_norm
+
+        return {"u": u[support], "support": support}
 
 
 # if __name__ == "__main__":
