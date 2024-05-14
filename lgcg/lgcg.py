@@ -3,7 +3,6 @@ import logging
 from typing import Callable
 from lib.default_values import *
 from lib.ssn import SSN
-from lib.lsi import LSI
 from lib.measure import Measure
 
 logging.basicConfig(
