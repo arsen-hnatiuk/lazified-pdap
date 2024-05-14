@@ -22,6 +22,7 @@ class LGCG:
         hess_p: Callable,
         norm_K_star: float,
         norm_K_star_L: float,
+        norm_K_L: float,
         global_search_resolution: float = 10,
         alpha: float = 1,
         gamma: float = 1,
@@ -57,8 +58,9 @@ class LGCG:
         self.L = L
         self.norm_K_star = norm_K_star
         self.norm_K_star_L = norm_K_star_L
+        self.norm_K_L = norm_K_L
         self.Omega = Omega
-        self.C = self.L * self.M**2  # TODO
+        self.C = 4 * self.L * self.M**2 * self.norm_K_L**2
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
@@ -401,29 +403,22 @@ class LGCG_finite:
 
     def __init__(
         self,
-        M: float,
         target: np.ndarray,
         K: np.ndarray,
         alpha: float = 1,
-        gamma: float = 1,
-        L: float = 1,
-        norm_K_star: float = None,
     ) -> None:
-        self.M = M
         self.target = target
+        self.M = np.linalg.norm(self.target) ** 2  # value of j at initial u
         self.K = K
         self.f = get_default_f(self.K, self.target)
         self.p = get_default_p(self.K, self.target)
         self.alpha = alpha
         self.g = get_default_g(self.alpha)
-        self.gamma = gamma
-        self.L = L
-        self.norm_K_star = (
-            norm_K_star
-            if not norm_K_star is None
-            else np.max([np.linalg.norm(row) for row in np.transpose(self.K)])
-        )  # the 2,inf norm of the transpose of K
-        self.C = self.L * self.M**2
+        self.L = 1
+        self.norm_K = np.max(
+            [np.linalg.norm(row) for row in np.transpose(self.K)]
+        )  # the 2,inf norm of K* = the 1,2 norm of K
+        self.C = 4 * self.L * self.M**2 * self.norm_K**2
         self.j = lambda u: self.f(u) + self.g(u)
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
