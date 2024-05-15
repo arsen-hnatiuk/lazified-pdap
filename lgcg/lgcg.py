@@ -62,6 +62,7 @@ class LGCG:
         self.Omega = Omega
         self.C = 4 * self.L * self.M**2 * self.norm_K_L**2
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
+        self.machine_precision = 1e-11
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
         return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
@@ -225,7 +226,7 @@ class LGCG:
             for ind, (point, processing) in enumerate(zip(grid, processing_array)):
                 if processing:
                     gradient = grad_P(point)
-                    if np.linalg.norm(gradient) < 1e-11:
+                    if np.linalg.norm(gradient) < self.machine_precision:
                         processing_array[ind] = False
                         continue
                     hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
@@ -427,6 +428,7 @@ class LGCG_finite:
             self.j(np.zeros(self.K.shape[1])) / self.alpha
         )  # Bound on the norm of iterates
         self.C = 4 * self.L * self.M**2 * self.norm_K**2  # Smoothness constant
+        self.machine_precision = 1e-11
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
         return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
@@ -454,23 +456,27 @@ class LGCG_finite:
         Phi_value = self.Phi(p_u, u, x)
         start_time = time.time()
         ssn_time = 0
-        ssn_step_counter = 0
         while Phi_value > tol:
             u_old = u.copy()
             Psi_old = Psi
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
-            Psi = min(Psi, self.M * epsilon)
+            Psi = max(min(Psi, self.M * epsilon), self.machine_precision)
             if x in support:
                 Psi = Psi / 2
             v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
-            if self.explicit_Phi(p=p_u, u=u, v=v) >= self.M * epsilon:
+            Phi_x = self.explicit_Phi(p=p_u, u=u, v=v)
+            if Phi_x >= self.M * epsilon:
                 u = (1 - eta) * u + eta * v
             elif (
                 self.explicit_Phi(p=p_u, u=u, v=np.zeros(self.K.shape[1]))
                 >= self.M * epsilon
             ):
                 u = (1 - eta) * u
+            elif Phi_x > 0:
+                eta_local = Phi_x / self.C
+                if eta_local * self.M > self.machine_precision:
+                    u = (1 - eta_local) * u + eta_local * v
 
             if not np.array_equal(u, u_old) or Psi_old != Psi:
                 # Low-dimensional optimization
@@ -481,13 +487,12 @@ class LGCG_finite:
                 u_raw = ssn.solve(tol=Psi, u_0=u[support_extended])
                 ssn_time += time.time() - ssn_start
 
-                if not np.array_equal(u_raw, u[support_extended]):
+                if not np.array_equal(u_raw, u_old[support_extended]):
                     # SSN found a different solution
-                    ssn_step_counter += 1
                     u = np.zeros(len(u))
                     for ind, pos in enumerate(support_extended):
                         u[pos] = u_raw[ind]
-                    support = support_extended[np.abs(u_raw) > 1e-11]
+                    support = support_extended[np.abs(u_raw) > self.machine_precision]
                     p_u = self.p(u)
                     x = np.argmax(np.absolute(p_u))
                     Phi_value = self.Phi(p_u, u, x)
@@ -497,7 +502,7 @@ class LGCG_finite:
             )
             k += 1
         logging.info(
-            f"LGCG converged in {k} iterations ({ssn_step_counter} SSN iterations) and {time.time()-start_time:.3f}s (SSN time {ssn_time:.3f}s) to tolerance {tol:.3E} with final sparsity of {len(support)}"
+            f"LGCG converged in {k} iterations and {time.time()-start_time:.3f}s (SSN time {ssn_time:.3f}s) to tolerance {tol:.3E} with final sparsity of {len(support)}"
         )
         # Rescale the solution
         for ind, pos in enumerate(self.K_norms):
@@ -516,7 +521,6 @@ class LGCG_finite:
         start_time = time.time()
         ssn_time = 0
         while Phi_value > tol:
-            u_old = u.copy()
             eta = 4 / (k + 3)
             v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
             u = (1 - eta) * u + eta * v
@@ -526,13 +530,13 @@ class LGCG_finite:
             K_support = self.K[:, support_extended]
             ssn_start = time.time()
             ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
-            u_raw = ssn.solve(tol=1e-11, u_0=u[support_extended])
+            u_raw = ssn.solve(tol=self.machine_precision, u_0=u[support_extended])
             ssn_time += time.time() - ssn_start
 
             u = np.zeros(len(u))
             for ind, pos in enumerate(support_extended):
                 u[pos] = u_raw[ind]
-            support = support_extended[np.abs(u_raw) > 1e-11]
+            support = support_extended[np.abs(u_raw) > self.machine_precision]
             p_u = self.p(u)
             x = np.argmax(np.absolute(p_u))
             Phi_value = self.Phi(p_u, u, x)
