@@ -408,9 +408,15 @@ class LGCG_finite:
         K: np.ndarray,
         alpha: float = 1,
     ) -> None:
+        K = np.append(
+            K,
+            np.ones((K.shape[0], 1)),
+            axis=1,
+        )  # Adding a constant term
         self.K_norms = np.linalg.norm(K, axis=0)
+        self.K_norms[self.K_norms == 0] = 1  # Avoid division by zero
         self.K_transpose = np.array(
-            [row / norm for row, norm in zip(np.transpose(K), self.K_norms)]
+            [row / norm for row, norm in zip(K.T, self.K_norms)]
         )
         self.K = np.transpose(self.K_transpose)
         self.target_norm = np.linalg.norm(target)
@@ -423,10 +429,11 @@ class LGCG_finite:
         self.norm_K = np.max(
             [np.linalg.norm(row) for row in np.transpose(self.K)]
         )  # the 2,inf norm of K* = the 1,2 norm of K
+        self.u_0 = np.eye(1, self.K.shape[1], self.K.shape[1] - 1)[
+            0
+        ]  # Only the constatn term
         self.j = lambda u: self.f(u) + self.g(u)
-        self.M = (
-            self.j(np.zeros(self.K.shape[1])) / self.alpha
-        )  # Bound on the norm of iterates
+        self.M = self.j(self.u_0) / self.alpha  # Bound on the norm of iterates
         self.C = 4 * self.L * self.M**2 * self.norm_K**2  # Smoothness constant
         self.machine_precision = 1e-11
 
@@ -446,8 +453,8 @@ class LGCG_finite:
         )
 
     def solve(self, tol: float) -> dict:
-        support = np.array([])
-        u = np.zeros(self.K.shape[1])
+        u = self.u_0
+        support = np.where(u != 0)[0]
         p_u = self.p(u)
         x = np.argmax(np.absolute(p_u))
         epsilon = self.j(u) / self.M
@@ -475,8 +482,7 @@ class LGCG_finite:
                 u = (1 - eta) * u
             elif Phi_x > 0:
                 eta_local = Phi_x / self.C
-                if eta_local * self.M > self.machine_precision:
-                    u = (1 - eta_local) * u + eta_local * v
+                u = (1 - eta_local) * u + eta_local * v
 
             if not np.array_equal(u, u_old) or Psi_old != Psi:
                 # Low-dimensional optimization
@@ -485,6 +491,7 @@ class LGCG_finite:
                 K_support = self.K[:, support_extended]
                 ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
                 u_raw = ssn.solve(tol=Psi, u_0=u[support_extended])
+                u_raw[np.abs(u_raw) < self.machine_precision] = 0
                 ssn_time += time.time() - ssn_start
 
                 if not np.array_equal(u_raw, u_old[support_extended]):
@@ -492,10 +499,10 @@ class LGCG_finite:
                     u = np.zeros(len(u))
                     for ind, pos in enumerate(support_extended):
                         u[pos] = u_raw[ind]
-                    support = support_extended[np.abs(u_raw) > self.machine_precision]
                     p_u = self.p(u)
                     x = np.argmax(np.absolute(p_u))
                     Phi_value = self.Phi(p_u, u, x)
+                    support = np.where(u != 0)[0]
 
             logging.info(
                 f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {support}, Psi {Psi:.3E}"
@@ -512,8 +519,8 @@ class LGCG_finite:
         return {"u": u[support], "support": support}
 
     def solve_exact(self, tol: float) -> dict:
-        support = np.array([])
-        u = np.zeros(self.K.shape[1])
+        u = self.u_0
+        support = np.where(u != 0)[0]
         p_u = self.p(u)
         x = np.argmax(np.absolute(p_u))
         k = 1
@@ -521,7 +528,7 @@ class LGCG_finite:
         start_time = time.time()
         ssn_time = 0
         while Phi_value > tol:
-            eta = 4 / (k + 3)
+            eta = 4 / (k + 4)
             v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
             u = (1 - eta) * u + eta * v
 
@@ -531,15 +538,16 @@ class LGCG_finite:
             ssn_start = time.time()
             ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
             u_raw = ssn.solve(tol=self.machine_precision, u_0=u[support_extended])
+            u_raw[np.abs(u_raw) < self.machine_precision] = 0
             ssn_time += time.time() - ssn_start
 
             u = np.zeros(len(u))
             for ind, pos in enumerate(support_extended):
                 u[pos] = u_raw[ind]
-            support = support_extended[np.abs(u_raw) > self.machine_precision]
             p_u = self.p(u)
             x = np.argmax(np.absolute(p_u))
             Phi_value = self.Phi(p_u, u, x)
+            support = np.where(u != 0)[0]
 
             logging.info(f"{k}: Phi {Phi_value:.3E}, support {support}")
             k += 1
