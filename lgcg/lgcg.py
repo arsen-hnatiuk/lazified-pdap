@@ -19,20 +19,26 @@ class LGCG:
         k: Callable,
         p: Callable,
         grad_p: Callable,
-        hess_p: Callable,
         norm_K_star: float,
         norm_K_star_L: float,
         norm_K_L: float,
         global_search_resolution: float = 10,
+        grad_k: Callable = None,
+        hess_k: Callable = None,
         alpha: float = 1,
         gamma: float = 1,
         theta: float = 1,
+        sigma: float = 1e-3,  # TODO: veify choice
+        m: float = 1e-5,  # TODO: veify choice
+        bar_m: float = 10,  # TODO: veify choice
         L: float = 1,
         Omega: np.ndarray = None,
     ) -> None:
         self.M = M
         self.target = target
         self.k = k
+        self.grad_k = grad_k
+        self.hess_k = hess_k
         self.f = (
             lambda u: 0.5
             * np.linalg.norm(
@@ -54,6 +60,7 @@ class LGCG:
         self.g = get_default_g(self.alpha)
         self.gamma = gamma
         self.theta = theta
+        self.sigma = sigma
         self.L = L
         self.norm_K_star = norm_K_star
         self.norm_K_star_L = norm_K_star_L
@@ -61,6 +68,10 @@ class LGCG:
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
         self.C = 4 * self.L * self.M**2 * self.norm_K_L**2
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
+        self.grad_j = get_grad_j(self.k, self.grad_k, self.alpha, self.target)
+        self.hess_j = get_hess_j(
+            self.k, self.grad_k, self.hessk, self.alpha, self.target
+        )
         self.machine_precision = 1e-11
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
@@ -304,7 +315,7 @@ class LGCG:
         max_P_A = max([abs(p_u(x)) for x in u.support])
         true_Psi = self.Psi(u, p_u)
         epsilon = self.j(u) / self.M
-        Psi_k = epsilon
+        Psi_k = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
         Phi_k = 1
         k = 1
         while Phi_k > tol:
@@ -322,6 +333,7 @@ class LGCG:
                 K_support = np.transpose(np.array([self.k(x) for x in u_start.support]))
                 ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
                 u_raw = ssn.solve(tol=Psi_k, u_0=u_start.coefficients)
+                u_raw[np.abs(u_raw) < self.machine_precision] = 0
                 # Reconstruct u
                 u = Measure(
                     support=u_start.support[u_raw != 0].copy(),
@@ -341,13 +353,16 @@ class LGCG:
                 # TODO implement stopping for global search e.g. if u_hat chosen last iteration
             else:
                 x_k = x_tilde_lsi
+            v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
             if not (len(x_tilde_lsi) or global_valid):
                 if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
                     u_plus = u * (1 - eta)
+                elif self.explicit_Phi(p_u, u, v) >= self.M * epsilon:
+                    eta_local = self.explicit_Phi(p_u, u, v) / self.C
+                    u_plus = u * (1 - eta_local) + v * eta_local
                 else:
                     u_plus = u * 1  # Create a new measure with the same parameters
             else:
-                v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
                 u_plus = u * (1 - eta) + v * eta
             if lsi_valid:
                 v_hat = self.local_measure_constructor(p_u, u, x_hat_lsi, lsi_set)
@@ -408,6 +423,113 @@ class LGCG:
                     axis=0,
                 )
             )
+            k += 1
+        return u
+
+    def local_clustering(self, u: Measure, p_u: Callable) -> tuple:
+        sorting_values = [0] * len(u.support)
+        for ind, x, c in enumerate(zip(u.support, u.coefficients)):
+            for x_local, c_local in zip(u.support, u.coefficients):
+                if np.linalg.norm(x - x_local) < 2 * self.R:
+                    sorting_values[ind] += c_local * p_u(x_local)
+        tuples = [(x, c) for x, c in zip(u.support, u.coefficients)]
+        tuples_sorted = [
+            x
+            for _, x in sorted(
+                zip(sorting_values, tuples), key=lambda t: t[0], reverse=True
+            )
+        ]
+        clustered_tuples = []
+        already_clustered = []
+        for x, c in tuples_sorted:
+            if x not in already_clustered:
+                coefficient = 0
+                for x_local, c_local in tuples_sorted:
+                    if (
+                        x_local not in already_clustered
+                        and np.linalg.norm(x - x_local) < 2 * self.R
+                    ):
+                        coefficient += c_local
+                        already_clustered.append(x_local)
+                clustered_tuples.append((x, coefficient))
+        return clustered_tuples
+
+    def solve_newton(self, tol: float) -> Measure:
+        u = Measure()
+        p_u = self.p(u)
+        epsilon = self.j(u) / self.M
+        Psi_1 = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
+        Psi_k = Psi_1
+        k = 1
+        steps_since_clustering = 0
+        last_value_clustering = self.j(u)
+        while True:
+            c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
+            grad_j_z = self.grad_j(c_points, c_coefs)
+            if np.linalg.norm(grad_j_z) < tol:
+                # Stopping criterion
+                break
+            hess_j_z = self.hess_j(c_points, c_coefs)
+            if self.j(u) < last_value_clustering and steps_since_clustering > 10:
+                # Force clustering
+                last_value_clustering = self.j(u)
+                steps_since_clustering = 0
+                u = Measure(c_points, c_coefs)
+            nu = min(
+                1,
+                (
+                    -self.m
+                    + np.sqrt(
+                        self.m**1
+                        + 8 * self.m * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)
+                    )
+                )
+                / (4 * self.L * self.bar_m * np.linalg.norm(grad_j_z)),
+            )
+            (c_points_plus, c_coefs_plus) = (c_points, c_coefs) - nu * np.linalg.solve(
+                hess_j_z, grad_j_z
+            )  # TODO
+            u_tilde_plus = Measure(c_points_plus, c_coefs_plus)
+            eta = 4 / (k + 3)
+            epsilon = self.update_epsilon(eta, epsilon)
+            x_k, global_valid = self.global_search(p_u, u, epsilon)
+            v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
+            if not global_valid:
+                if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
+                    u_hat_plus = u * (1 - eta)
+                elif self.explicit_Phi(p_u, u, v) >= self.M * epsilon:
+                    eta_local = self.explicit_Phi(p_u, u, v) / self.C
+                    u_hat_plus = u * (1 - eta_local) + v * eta_local
+                else:
+                    u_hat_plus = u * 1  # Create a new measure with the same parameters
+            else:
+                u_hat_plus = u * (1 - eta) + v * eta
+
+            if self.j(u_hat_plus) < self.j(u_tilde_plus):
+                choice = "gcg"
+                u_plus = u_hat_plus
+                local_Psi = Psi_k
+                Psi_k = max(Psi_k / 2, self.machine_precision)
+                steps_since_clustering += 1
+            else:
+                choice = "newton"
+                u_plus = u_tilde_plus
+                local_Psi = Psi_1
+                steps_since_clustering = 0
+
+            # Low-dimensional step
+            K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
+            ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
+            u_raw = ssn.solve(tol=local_Psi, u_0=u_plus.coefficients)
+            u_raw[np.abs(u_raw) < self.machine_precision] = 0
+            # Reconstruct u
+            u = Measure(
+                support=u_plus.support[u_raw != 0].copy(),
+                coefficients=u_raw[u_raw != 0].copy(),
+            )
+            if choice == "newton":
+                last_value_clustering = self.j(u)
+            p_u = self.p(u)
             k += 1
         return u
 
