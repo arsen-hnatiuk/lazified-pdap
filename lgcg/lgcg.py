@@ -49,7 +49,6 @@ class LGCG:
         self.p = p
         # self.P = lambda u, x: abs(self.p(u)(x))
         self.grad_P = grad_p
-        self.hess_P = hess_p
         self.global_search_resolution = global_search_resolution
         self.alpha = alpha
         self.g = get_default_g(self.alpha)
@@ -59,7 +58,7 @@ class LGCG:
         self.norm_K_star = norm_K_star
         self.norm_K_star_L = norm_K_star_L
         self.norm_K_L = norm_K_L
-        self.Omega = Omega
+        self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
         self.C = 4 * self.L * self.M**2 * self.norm_K_L**2
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
         self.machine_precision = 1e-11
@@ -90,6 +89,14 @@ class LGCG:
         Psi: float,
     ) -> tuple:
         # Implementation of the local support improver
+        if not len(u.support):
+            return (
+                np.array([]),
+                np.array([]),
+                np.array([]),
+                np.array([]),
+                False,
+            )  # No points to improve around
         p_norm = lambda x: abs(p_u(x))
         grad_P = lambda x: self.grad_P(u, x)
         lsi_set = u.support.copy()
@@ -111,14 +118,16 @@ class LGCG:
             while (
                 P_point - P_x < 2 * self.R * np.linalg.norm(gradient)
                 or np.linalg.norm(gradient) > condition
-            ) and self.project_into_omega(point) == point:
-                lsi_set[ind] = point
+            ):
                 hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
                 d = np.linalg.solve(
                     hessian + damping * np.eye(len(gradient)), -gradient
                 )  # Damped Newton step
                 point = point + d
-                if np.linalg.norm(point - original_point) >= 2 * self.R:
+                if (
+                    np.linalg.norm(point - original_point) >= 2 * self.R
+                    or self.project_into_omega(point) != point
+                ):
                     return (
                         x_hat,
                         x_tilde,
@@ -126,6 +135,7 @@ class LGCG:
                         lsi_set,
                         False,
                     )  # No maximizer in the given radius
+                lsi_set[ind] = point
                 P_point = p_norm(point)
                 gradient = grad_P(point)
                 condition = (
@@ -141,8 +151,7 @@ class LGCG:
                     )
                     + Psi
                     > self.M * epsilon
-                ) and self.project_into_omega(point) == point:
-                    lsi_set[ind] = point
+                ):
                     if (
                         self.M * (P_point - max(max_P_A, self.alpha)) + Psi
                         >= self.M * epsilon
@@ -154,38 +163,30 @@ class LGCG:
                         hessian + damping * np.eye(len(gradient)), -gradient
                     )  # Damped Newton step
                     point = point + d
+                    if (
+                        np.linalg.norm(point - original_point) >= 2 * self.R
+                        or self.project_into_omega(point) != point
+                    ):
+                        return (
+                            x_hat,
+                            x_tilde,
+                            x_check,
+                            lsi_set,
+                            False,
+                        )  # No maximizer in the given radius
+                    lsi_set[ind] = point
                     P_point = p_norm(point)
                     gradient = grad_P(point)
-                if np.linalg.norm(point - original_point) >= 2 * self.R:
-                    return (
-                        x_hat,
-                        x_tilde,
-                        x_check,
-                        lsi_set,
-                        False,
-                    )  # No maximizer in the given radius
-            if P_point - P_x > x_hat_value and self.project_into_omega(point) == point:
+            if P_point - P_x > x_hat_value:
                 x_hat = point
                 x_hat_value = P_point - P_x
-            if (
-                P_point + 2 * self.R * np.linalg.norm(gradient) > x_check_value
-                and self.project_into_omega(point) == point
-            ):
+            if P_point + 2 * self.R * np.linalg.norm(gradient) > x_check_value:
                 x_check = point
                 x_check_value = P_point + 2 * self.R * np.linalg.norm(gradient)
-        for poin in lsi_set:
-            if self.project_into_omega(poin) != point:
-                return (
-                    x_hat,
-                    x_tilde,
-                    x_check,
-                    lsi_set,
-                    False,
-                )  # Points ouside of the desired domain
         if (
             self.M * (p_norm(x_hat) - max(max_P_A, self.alpha)) + Psi
             >= self.M * epsilon
-        ):
+        ):  # TODO check if can be replaced by self.explicit_Phi
             x_tilde = x_hat
         return x_hat, x_tilde, x_check, lsi_set, True
 
@@ -294,7 +295,7 @@ class LGCG:
                 new_coefficients.append(c)
         return Measure(new_support, new_coefficients)
 
-    def solve(self, tol: float) -> None:
+    def solve(self, tol: float) -> Measure:
         u = Measure()
         support_plus = np.array([])
         u_plus = Measure()
@@ -306,7 +307,7 @@ class LGCG:
         Psi_k = epsilon
         Phi_k = 1
         k = 1
-        while True:
+        while Phi_k > tol:
             if k > 1:
                 # Low-dimensional step
                 if self.j(u_plus) < self.j(u_plus_hat):
@@ -329,8 +330,6 @@ class LGCG:
                 p_u = self.p(u)
                 max_P_A = max([abs(p_u(x)) for x in u.support])
                 true_Psi = self.Psi(u, p_u)
-            if Phi_k <= tol:
-                break
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             x_hat_lsi, x_check_lsi, x_tilde_lsi, lsi_set, lsi_valid = self.lsi(
@@ -339,6 +338,7 @@ class LGCG:
             x_k = np.array([])
             if not len(x_tilde_lsi):
                 x_k, global_valid = self.global_search(p_u, u, epsilon)
+                # TODO implement stopping for global search e.g. if u_hat chosen last iteration
             else:
                 x_k = x_tilde_lsi
             if not (len(x_tilde_lsi) or global_valid):
@@ -351,7 +351,20 @@ class LGCG:
                 u_plus = u * (1 - eta) + v * eta
             if lsi_valid:
                 v_hat = self.local_measure_constructor(p_u, u, x_hat_lsi, lsi_set)
-                u_plus_hat = v_hat * eta + u * (1 - eta)
+                nu_constant = (
+                    2
+                    * self.M
+                    * (
+                        32
+                        * self.L
+                        * self.M**2
+                        * self.norm_K_star_L**2
+                        * (1 + self.L * self.norm_K_star / (2 * np.sqrt(self.gamma)))
+                        / self.theta
+                    )
+                )
+                nu = min(1, 3 * abs(v_hat.coefficients[0]) / nu_constant)
+                u_plus_hat = u * (1 - nu) + v_hat * nu
             else:
                 u_plus_hat = u_plus * 1  # Create a new measure with the same parameters
             # Build Phi_k
@@ -379,7 +392,7 @@ class LGCG:
                 * self.M
                 * self.L
                 * self.norm_K_star
-                * max(3, 4 * self.C * self.theta * self.M**2 * self.norm_K_star_L)
+                * max(3, 16 * self.L * self.M**2 * self.norm_K_star_L / self.theta)
                 * np.sqrt(Psi_k)
                 / np.sqrt(self.gamma)
                 + 4 * Psi_k
