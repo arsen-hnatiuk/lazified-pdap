@@ -14,14 +14,12 @@ logging.basicConfig(
 class LGCG:
     def __init__(
         self,
-        M: float,
         target: np.ndarray,
         k: Callable,
         p: Callable,
-        grad_p: Callable,
+        grad_P: Callable,
         norm_K_star: float,
         norm_K_star_L: float,
-        norm_K_L: float,
         global_search_resolution: float = 10,
         grad_k: Callable = None,
         hess_k: Callable = None,
@@ -33,8 +31,8 @@ class LGCG:
         bar_m: float = 10,  # TODO: veify choice
         L: float = 1,
         Omega: np.ndarray = None,
+        R: float = 0.01,
     ) -> None:
-        self.M = M
         self.target = target
         self.k = k
         self.grad_k = grad_k
@@ -54,20 +52,24 @@ class LGCG:
         )
         self.p = p
         # self.P = lambda u, x: abs(self.p(u)(x))
-        self.grad_P = grad_p
+        self.grad_P = grad_P
         self.global_search_resolution = global_search_resolution
         self.alpha = alpha
         self.g = get_default_g(self.alpha)
         self.gamma = gamma
         self.theta = theta
         self.sigma = sigma
+        self.m = m
+        self.bar_m = bar_m
         self.L = L
         self.norm_K_star = norm_K_star
         self.norm_K_star_L = norm_K_star_L
-        self.norm_K_L = norm_K_L
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
-        self.C = 4 * self.L * self.M**2 * self.norm_K_L**2
+        self.C = 4 * self.L * self.M**2 * self.norm_K_star**2
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
+        self.u_0 = Measure()
+        self.M = self.j(self.u_0) / self.alpha  # Bound on the norm of iterates
+        self.R = R
         self.grad_j = get_grad_j(self.k, self.grad_k, self.alpha, self.target)
         self.hess_j = get_hess_j(
             self.k, self.grad_k, self.hessk, self.alpha, self.target
