@@ -72,7 +72,7 @@ class LGCG:
         self.R = R
         self.grad_j = get_grad_j(self.k, self.grad_k, self.alpha, self.target)
         self.hess_j = get_hess_j(
-            self.k, self.grad_k, self.hessk, self.alpha, self.target
+            self.k, self.grad_k, self.hess_k, self.alpha, self.target
         )
         self.machine_precision = 1e-11
 
