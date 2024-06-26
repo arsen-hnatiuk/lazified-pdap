@@ -1,5 +1,6 @@
 import numpy as np
 import scipy as sp
+import pandas as pd
 import logging
 from sissopp import FeatureSpace
 from sissopp.py_interface import import_dataframe
@@ -16,12 +17,12 @@ class LGCG_stochastic:
 
     def __init__(
         self,
-        target: np.array,
         alpha: float,
         data_path: str,
         test_power: float = 0.05,
         parameter_increase: float = 0.1,
     ) -> None:
+        target = pd.read_csv(data_path)["log kappa_L"].to_numpy()
         self.target_norm = np.linalg.norm(target)
         self.target = target / self.target_norm
         self.alpha = alpha
@@ -117,7 +118,7 @@ class LGCG_stochastic:
         self, rho: np.ndarray, observation: np.ndarray, u: np.ndarray, epsilon: float
     ) -> tuple:
         feature_space = FeatureSpace(self.feature_inputs)
-        sample_features_raw = np.array([feature.eval for feature in feature_space.phi])
+        sample_features_raw = np.array([feature.value for feature in feature_space.phi])
         sample_norms = np.linalg.norm(sample_features_raw, axis=1)
         sample_features = np.array(
             [feature / norm for feature, norm in zip(sample_features_raw, sample_norms)]
@@ -190,18 +191,19 @@ class LGCG_stochastic:
 
     def solve(self, tol: float) -> dict:
         u = np.array([])
-        active_K_T = np.array([[]])
+        active_K_T = np.array([])
         active_norms = np.array([])
         active_expressions = np.array([])
         observation = np.zeros(len(self.target))
         rho = self.rho(np.zeros((len(self.target), 1)), np.zeros(1))
         epsilon = self.j(np.zeros((len(self.target), 1)), np.zeros(1)) / self.M
+        k = 1
+        eta = 4 / (k + 3)
         epsilon = self.update_epsilon(eta, epsilon)
         x_dict, x_success = self.choose_x(rho, observation, u, epsilon)
         Psi = epsilon
-        k = 1
         Phi_value = self.Phi(
-            tho=rho,
+            rho=rho,
             u=u,
             observation_u=observation,
             observation_v=x_dict["feature"],
@@ -209,10 +211,9 @@ class LGCG_stochastic:
         while Phi_value > tol:
             u_old = u.copy()
             Psi_old = Psi
-            eta = 4 / (k + 3)
-            Psi = max(min(Psi, self.M * epsilon), self.machine_precision)
             if x_dict["expression"] in active_expressions:
                 Psi = Psi / 2
+            Psi = max(min(Psi, self.M * epsilon), self.machine_precision)
             if x_success:
                 if x_dict["expression"] in active_expressions:
                     index = np.where(active_expressions == x_dict["expressions"])[0][0]
@@ -222,16 +223,19 @@ class LGCG_stochastic:
                         * np.eye(1, len(u), index)[0]
                     )
                 else:
-                    active_K_T = np.append(active_K_T, x_dict["feature"], axis=0)
+                    if len(active_K_T):
+                        active_K_T = np.vstack((active_K_T, x_dict["feature"]))
+                    else:
+                        active_K_T = np.array([x_dict["feature"]])
                     active_norms = np.append(active_norms, x_dict["feature_norm"])
                     active_expressions = np.append(
                         active_expressions, x_dict["expression"]
                     )
                     u = np.append(u, np.array([0]))
-                    v = v = (
+                    v = (
                         self.M
                         * np.sign(np.dot(rho, x_dict["feature"]))
-                        * np.eye(1, len(u), -1)[0]
+                        * np.eye(1, len(u), len(u) - 1)[0]
                     )
                 u = (1 - eta) * u + eta * v
             elif (
@@ -254,28 +258,35 @@ class LGCG_stochastic:
                         * np.eye(1, len(u), index)[0]
                     )
                 else:
-                    active_K_T = np.append(active_K_T, x_dict["feature"], axis=0)
+                    if len(active_K_T):
+                        active_K_T = np.vstack((active_K_T, x_dict["feature"]))
+                    else:
+                        active_K_T = np.array([x_dict["feature"]])
                     active_norms = np.append(active_norms, x_dict["feature_norm"])
                     active_expressions = np.append(
                         active_expressions, x_dict["expression"]
                     )
                     u = np.append(u, np.array([0]))
-                    v = v = (
+                    v = (
                         self.M
                         * np.sign(np.dot(rho, x_dict["feature"]))
-                        * np.eye(1, len(u), -1)[0]
+                        * np.eye(1, len(u), len(u) - 1)[0]
                     )
                 eta_local = x_dict["Phi_value"] / self.C
                 u = (1 - eta_local) * u + eta_local * v
 
-            if len(u_old) != len(u) or not np.array_equal(u, u_old) or Psi_old != Psi:
+            k += 1
+            eta = 4 / (k + 3)
+            epsilon = self.update_epsilon(eta, epsilon)
+
+            if len(u) != len(u_old) or not np.array_equal(u, u_old) or Psi_old != Psi:
                 # Low-dimensional optimization
                 ssn = SSN(
                     K=active_K_T.T, alpha=self.alpha, target=self.target, M=self.M
                 )
                 u_raw = ssn.solve(tol=Psi, u_0=u)
 
-                if not np.array_equal(u_raw, u_old):
+                if len(u_raw) != len(u_old) or not np.array_equal(u_raw, u_old):
                     # SSN found a different solution
                     u_to_keep = np.where(np.abs(u_raw) >= self.machine_precision)[0]
                     u = u_raw[u_to_keep]
@@ -284,7 +295,6 @@ class LGCG_stochastic:
                     active_expressions = active_expressions[u_to_keep]
                     observation = np.matmul(active_K_T.T, u)
                     rho = self.rho(active_K_T.T, u)
-                    epsilon = self.update_epsilon(eta, epsilon)
                     x_dict, x_success = self.choose_x(rho, observation, u, epsilon)
                     Phi_value = self.Phi(
                         rho=rho,
@@ -292,15 +302,10 @@ class LGCG_stochastic:
                         observation_u=observation,
                         observation_v=x_dict["feature"],
                     )
-                else:
-                    epsilon = self.update_epsilon(eta, epsilon)
-            else:
-                epsilon = self.update_epsilon(eta, epsilon)
 
             logging.info(
                 f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {len(u)}, Psi {Psi:.3E}"
             )
-            k += 1
         logging.info(
             f"LGCG converged in {k} iterations to tolerance {tol:.3E} with final sparsity of {len(u)}"
         )
@@ -309,4 +314,4 @@ class LGCG_stochastic:
             u[ind] /= pos
         u = u * self.target_norm
 
-        return {"u": u, "support": len(u)}
+        return {"u": u, "support": len(u), "expressions": active_expressions}
