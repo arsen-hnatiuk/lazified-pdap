@@ -132,9 +132,7 @@ class LGCG:
                 or np.linalg.norm(gradient) > condition
             ):
                 hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
-                d = np.linalg.solve(
-                    hessian + damping * np.eye(len(gradient)), -gradient
-                )  # Damped Newton step
+                d = np.linalg.solve(hessian, -gradient)  # Gauss-Newton step
                 point = point + d
                 if (
                     np.linalg.norm(point - original_point) >= 2 * self.R
@@ -171,9 +169,7 @@ class LGCG:
                         x_tilde = point
                         break
                     hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
-                    d = np.linalg.solve(
-                        hessian + damping * np.eye(len(gradient)), -gradient
-                    )  # Damped Newton step
+                    d = np.linalg.solve(hessian, -gradient)  # Newton step
                     point = point + d
                     if (
                         np.linalg.norm(point - original_point) >= 2 * self.R
@@ -198,7 +194,7 @@ class LGCG:
         if (
             self.M * (p_norm(x_hat) - max(max_P_A, self.alpha)) + Psi
             >= self.M * epsilon
-        ):  # TODO check if can be replaced by self.explicit_Phi
+        ):
             x_tilde = x_hat
         return x_hat, x_tilde, x_check, lsi_set, True
 
@@ -243,9 +239,7 @@ class LGCG:
                         processing_array[ind] = False
                         continue
                     hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
-                    d = np.linalg.solve(
-                        hessian + damping * np.eye(len(gradient)), -gradient
-                    )  # Damped Newton step
+                    d = np.linalg.solve(hessian, -gradient)  # Newton step
                     new_point = self.project_into_omega(point + d)
                     if p_norm(new_point) <= p_norm(point):
                         processing_array[ind] = False
