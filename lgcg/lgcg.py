@@ -15,46 +15,34 @@ class LGCG:
         self,
         target: np.ndarray,
         k: Callable,
+        g: Callable,
+        f: Callable,
         p: Callable,
         grad_P: Callable,
         norm_K_star: float,
         norm_K_star_L: float,
-        global_search_resolution: float = 10,
-        grad_k: Callable = None,
-        hess_k: Callable = None,
-        alpha: float = 1,
+        grad_j: Callable,
+        hess_j: Callable,
+        alpha: float,
+        Omega: np.ndarray,
         gamma: float = 1,
-        theta: float = 1,
-        sigma: float = 1e-3,  # TODO: veify choice
-        m: float = 1e-5,  # TODO: veify choice
-        bar_m: float = 10,  # TODO: veify choice
+        theta: float = 1e-1,
+        global_search_resolution: float = 10,
+        sigma: float = 1e-3,
+        m: float = 1e-5,
+        bar_m: float = 1e3,
         L: float = 1,
-        Omega: np.ndarray = None,
-        R: float = 0.01,
+        R: float = 1e-2,
     ) -> None:
-        self.target = target
+        self.target_norm = np.linalg.norm(target)
+        self.target = target / self.target_norm
         self.k = k
-        self.grad_k = grad_k
-        self.hess_k = hess_k
-        self.f = (
-            lambda u: 0.5
-            * np.linalg.norm(
-                np.sum(
-                    np.array(
-                        [c * self.k(x) for x, c in zip(u.support, u.coefficients)]
-                    ),
-                    axis=0,
-                )
-                - self.target
-            )
-            ** 2
-        )
+        self.f = f
         self.p = p
-        # self.P = lambda u, x: abs(self.p(u)(x))
         self.grad_P = grad_P
         self.global_search_resolution = global_search_resolution
         self.alpha = alpha
-        self.g = get_default_g(self.alpha)
+        self.g = g
         self.gamma = gamma
         self.theta = theta
         self.sigma = sigma
@@ -64,15 +52,13 @@ class LGCG:
         self.norm_K_star = norm_K_star
         self.norm_K_star_L = norm_K_star_L
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
-        self.C = 4 * self.L * self.M**2 * self.norm_K_star**2
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
         self.u_0 = Measure()
         self.M = self.j(self.u_0) / self.alpha  # Bound on the norm of iterates
+        self.C = 4 * self.L * self.M**2 * self.norm_K_star**2
         self.R = R
-        self.grad_j = get_grad_j(self.k, self.grad_k, self.alpha, self.target)
-        self.hess_j = get_hess_j(
-            self.k, self.grad_k, self.hess_k, self.alpha, self.target
-        )
+        self.grad_j = grad_j
+        self.hess_j = hess_j
         self.machine_precision = 1e-11
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
@@ -89,7 +75,10 @@ class LGCG:
     def Psi(self, u: Measure, p_u: Callable) -> np.ndarray:
         # sup_v <p(u),v-u>+g(u)-g(v) over the support of u
         constant_part = -u.duality_pairing(p_u) + self.g(u.coefficients)
-        max_P_A = max([abs(p_u(x)) for x in u.support])
+        if len(u.support):
+            max_P_A = max([abs(p_u(x)) for x in u.support])
+        else:
+            max_P_A = 0
         variable_part = max(0, self.M * (max_P_A - self.alpha))
         return constant_part + variable_part
 
@@ -110,7 +99,7 @@ class LGCG:
                 False,
             )  # No points to improve around
         p_norm = lambda x: abs(p_u(x))
-        grad_P = lambda x: self.grad_P(u, x)
+        grad_P = lambda x: self.grad_P(x, u)
         lsi_set = u.support.copy()
         P_on_A = [p_norm(x) for x in u.support]
         max_P_A = max(P_on_A)
@@ -206,7 +195,7 @@ class LGCG:
 
     def global_search(self, p_u: Callable, u: Measure, epsilon: float) -> tuple:
         p_norm = lambda x: abs(p_u(x))
-        grad_P = lambda x: self.grad_P(u, x)
+        grad_P = lambda x: self.grad_P(x, u)
         grid = (
             np.array(
                 np.meshgrid(
@@ -307,7 +296,7 @@ class LGCG:
         u_plus = Measure()
         u_plus_hat = Measure()
         p_u = self.p(u)
-        max_P_A = max([abs(p_u(x)) for x in u.support])
+        max_P_A = 0
         true_Psi = self.Psi(u, p_u)
         epsilon = self.j(u) / self.M
         Psi_k = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
@@ -318,10 +307,12 @@ class LGCG:
                 # Low-dimensional step
                 if self.j(u_plus) < self.j(u_plus_hat):
                     u_start = Measure(u_plus.support.copy(), u_plus.coefficients.copy())
+                    choice = "GCG"
                 else:
                     u_start = Measure(
                         u_plus_hat.support.copy(), u_plus_hat.coefficients.copy()
                     )
+                    choice = "LSI"
                 # Insert zero coefficients to unsupported positions
                 u_start.add_zero_support(support_plus)
                 # Peform SSN
@@ -337,6 +328,9 @@ class LGCG:
                 p_u = self.p(u)
                 max_P_A = max([abs(p_u(x)) for x in u.support])
                 true_Psi = self.Psi(u, p_u)
+                logging.info(
+                    f"{k}: {choice}, support: {len(u.support)}, Phi_k: {Phi_k}"
+                )
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             x_hat_lsi, x_check_lsi, x_tilde_lsi, lsi_set, lsi_valid = self.lsi(
@@ -352,7 +346,7 @@ class LGCG:
             if not (len(x_tilde_lsi) or global_valid):
                 if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
                     u_plus = u * (1 - eta)
-                elif self.explicit_Phi(p_u, u, v) >= self.M * epsilon:
+                elif self.explicit_Phi(p_u, u, v) >= 0:
                     eta_local = self.explicit_Phi(p_u, u, v) / self.C
                     u_plus = u * (1 - eta_local) + v * eta_local
                 else:
@@ -410,20 +404,19 @@ class LGCG:
             if constant > Phi_k:
                 # recompute step
                 Psi_k = min(Psi_k / 2, Phi_k**2)
+                logging.info(
+                    f"Recompute, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
+                )
                 continue
             support_plus = np.unique(
-                np.append(
-                    u.support.copy(),
-                    np.append(u_plus.support.copy(), u_plus_hat.support.copy(), axis=0),
-                    axis=0,
-                )
+                np.vstack([u_plus.support.copy(), u_plus_hat.support.copy()]), axis=0
             )
             k += 1
-        return u
+        return u * self.target_norm
 
     def local_clustering(self, u: Measure, p_u: Callable) -> tuple:
         sorting_values = [0] * len(u.support)
-        for ind, x, c in enumerate(zip(u.support, u.coefficients)):
+        for ind, (x, c) in enumerate(zip(u.support, u.coefficients)):
             for x_local, c_local in zip(u.support, u.coefficients):
                 if np.linalg.norm(x - x_local) < 2 * self.R:
                     sorting_values[ind] += c_local * p_u(x_local)
@@ -437,17 +430,48 @@ class LGCG:
         clustered_tuples = []
         already_clustered = []
         for x, c in tuples_sorted:
-            if x not in already_clustered:
+            if not len(already_clustered) or not np.any(
+                np.all(np.array(already_clustered) == x, axis=1)
+            ):
                 coefficient = 0
                 for x_local, c_local in tuples_sorted:
                     if (
-                        x_local not in already_clustered
-                        and np.linalg.norm(x - x_local) < 2 * self.R
-                    ):
+                        not len(already_clustered)
+                        or not np.any(
+                            np.all(np.array(already_clustered) == x_local, axis=1)
+                        )
+                    ) and np.linalg.norm(x - x_local) < 2 * self.R:
                         coefficient += c_local
                         already_clustered.append(x_local)
                 clustered_tuples.append((x, coefficient))
         return clustered_tuples
+
+    def compute_newton_step(self, points: np.ndarray, coefs: np.ndarray) -> Measure:
+        grad_j_z = self.grad_j(points, coefs)
+        hess_j_z = self.hess_j(points, coefs)
+        nu = min(
+            1,
+            (
+                -self.m
+                + np.sqrt(
+                    self.m**2
+                    + 8 * self.m * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)
+                )
+            )
+            / (4 * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)),
+        )
+        update_direction = np.linalg.solve(hess_j_z, grad_j_z)
+        # Transform vector into tuples
+        coefs -= nu * update_direction[-len(coefs) :]
+        for i, point in enumerate(points):
+            points[i] -= (
+                nu
+                * update_direction[
+                    i * self.Omega.shape[0] : (i + 1) * self.Omega.shape[0]
+                ]
+            )
+        u_plus = Measure(points, coefs)
+        return u_plus
 
     def solve_newton(self, tol: float) -> Measure:
         u = Measure()
@@ -459,32 +483,23 @@ class LGCG:
         steps_since_clustering = 0
         last_value_clustering = self.j(u)
         while True:
-            c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
-            grad_j_z = self.grad_j(c_points, c_coefs)
-            if np.linalg.norm(grad_j_z) < tol:
-                # Stopping criterion
-                break
-            hess_j_z = self.hess_j(c_points, c_coefs)
-            if self.j(u) < last_value_clustering and steps_since_clustering > 10:
-                # Force clustering
-                last_value_clustering = self.j(u)
-                steps_since_clustering = 0
-                u = Measure(c_points, c_coefs)
-            nu = min(
-                1,
-                (
-                    -self.m
-                    + np.sqrt(
-                        self.m**1
-                        + 8 * self.m * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)
-                    )
-                )
-                / (4 * self.L * self.bar_m * np.linalg.norm(grad_j_z)),
-            )
-            (c_points_plus, c_coefs_plus) = (c_points, c_coefs) - nu * np.linalg.solve(
-                hess_j_z, grad_j_z
-            )  # TODO
-            u_tilde_plus = Measure(c_points_plus, c_coefs_plus)
+            if len(u.coefficients):
+                c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
+                c_points = list(c_points)
+                c_coefs = list(c_coefs)
+                grad_j_z = self.grad_j(c_points, c_coefs)
+                grad_norm = np.linalg.norm(grad_j_z)
+                if grad_norm < tol:
+                    # Stopping criterion
+                    break
+                if self.j(u) < last_value_clustering and steps_since_clustering > 10:
+                    # Force clustering
+                    last_value_clustering = self.j(u)
+                    steps_since_clustering = 0
+                    u = Measure(c_points, c_coefs)
+                u_tilde_plus = self.compute_newton_step(c_points, c_coefs)
+            else:
+                u_tilde_plus = u
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             x_k, global_valid = self.global_search(p_u, u, epsilon)
@@ -492,7 +507,7 @@ class LGCG:
             if not global_valid:
                 if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
                     u_hat_plus = u * (1 - eta)
-                elif self.explicit_Phi(p_u, u, v) >= self.M * epsilon:
+                elif self.explicit_Phi(p_u, u, v) >= 0:
                     eta_local = self.explicit_Phi(p_u, u, v) / self.C
                     u_hat_plus = u * (1 - eta_local) + v * eta_local
                 else:
@@ -525,5 +540,10 @@ class LGCG:
             if choice == "newton":
                 last_value_clustering = self.j(u)
             p_u = self.p(u)
+            if k == 1:
+                grad_norm = "N/A"
+            logging.info(
+                f"{k}: {choice}, support: {len(u.support)}, grad_norm:{grad_norm}"
+            )
             k += 1
-        return u
+        return u * self.target_norm

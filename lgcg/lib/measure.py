@@ -20,14 +20,14 @@ class Measure:
         for point in support_plus:
             if point not in self.support:
                 if len(self.support.shape) == 1:
-                    self.support = np.append(self.support, point)
+                    self.support = np.array([point])
                 else:
                     self.support = np.vstack([self.support, point])
                 self.coefficients = np.append(self.coefficients, 0)
 
     def duality_pairing(self, fct: Callable) -> float:
         # Compute the duality pairing of the measure with a function defined on Omega
-        return sum([c * fct(x) for x, c in zip([self.support, self.coefficients])])
+        return sum([c * fct(x) for x, c in zip(self.support, self.coefficients)])
 
     def __add__(self, other):
         # Add two measures
@@ -37,7 +37,7 @@ class Measure:
         for x, c in zip(other.support, other.coefficients):
             changed = False
             for i, pos in enumerate(new.support):
-                if pos == x:
+                if np.array_equal(pos, x):
                     new.coefficients[i] += c
                     changed = True
                     break
