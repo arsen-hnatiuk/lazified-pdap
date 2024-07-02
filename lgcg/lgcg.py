@@ -19,27 +19,28 @@ class LGCG:
         f: Callable,
         p: Callable,
         grad_P: Callable,
+        hess_P: Callable,
         norm_K_star: float,
         norm_K_star_L: float,
         grad_j: Callable,
         hess_j: Callable,
         alpha: float,
         Omega: np.ndarray,
-        gamma: float = 1,
-        theta: float = 1e-1,
-        global_search_resolution: float = 10,
-        sigma: float = 1e-3,
-        m: float = 1e-5,
-        bar_m: float = 1e3,
-        L: float = 1,
-        R: float = 1e-2,
+        gamma: float,
+        theta: float,
+        sigma: float,
+        m: float,
+        bar_m: float,
+        L: float,
+        R: float,
+        global_search_resolution: float = 15,
     ) -> None:
-        self.target_norm = np.linalg.norm(target)
-        self.target = target / self.target_norm
+        self.target = target
         self.k = k
         self.f = f
         self.p = p
         self.grad_P = grad_P
+        self.hess_P = hess_P
         self.global_search_resolution = global_search_resolution
         self.alpha = alpha
         self.g = g
@@ -59,7 +60,7 @@ class LGCG:
         self.R = R
         self.grad_j = grad_j
         self.hess_j = hess_j
-        self.machine_precision = 1e-11
+        self.machine_precision = 1e-15
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
         return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
@@ -100,6 +101,7 @@ class LGCG:
             )  # No points to improve around
         p_norm = lambda x: abs(p_u(x))
         grad_P = lambda x: self.grad_P(x, u)
+        hess_P = lambda x: self.hess_P(x, u)
         lsi_set = u.support.copy()
         P_on_A = [p_norm(x) for x in u.support]
         max_P_A = max(P_on_A)
@@ -113,6 +115,7 @@ class LGCG:
             P_x = p_norm(original_point)
             P_point = P_x
             gradient = grad_P(point)
+            hessian = hess_P(point)
             condition = (max(0, P_point - max(self.alpha, max_P_A)) + Psi / self.M) / (
                 4 * self.R
             )
@@ -120,12 +123,12 @@ class LGCG:
                 P_point - P_x < 2 * self.R * np.linalg.norm(gradient)
                 or np.linalg.norm(gradient) > condition
             ):
-                hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
-                d = np.linalg.solve(hessian, -gradient)  # Gauss-Newton step
+                d = np.linalg.solve(hessian, -gradient)  # Newton step
                 point = point + d
-                if (
-                    np.linalg.norm(point - original_point) >= 2 * self.R
-                    or self.project_into_omega(point) != point
+                if np.linalg.norm(
+                    point - original_point
+                ) >= 2 * self.R or not np.array_equal(
+                    self.project_into_omega(point), point
                 ):
                     return (
                         x_hat,
@@ -137,6 +140,7 @@ class LGCG:
                 lsi_set[ind] = point
                 P_point = p_norm(point)
                 gradient = grad_P(point)
+                hessian = hess_P(point)
                 condition = (
                     max(0, P_point - max(self.alpha, max_P_A)) + Psi / self.M
                 ) / (4 * self.R)
@@ -146,7 +150,7 @@ class LGCG:
                     * (
                         P_point
                         + 2 * self.R * np.linalg.norm(gradient)
-                        - max(max_P_A, self.aplha)
+                        - max(max_P_A, self.alpha)
                     )
                     + Psi
                     > self.M * epsilon
@@ -157,12 +161,12 @@ class LGCG:
                     ):
                         x_tilde = point
                         break
-                    hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
                     d = np.linalg.solve(hessian, -gradient)  # Newton step
                     point = point + d
-                    if (
-                        np.linalg.norm(point - original_point) >= 2 * self.R
-                        or self.project_into_omega(point) != point
+                    if np.linalg.norm(
+                        point - original_point
+                    ) >= 2 * self.R or not np.array_equal(
+                        self.project_into_omega(point), point
                     ):
                         return (
                             x_hat,
@@ -174,6 +178,7 @@ class LGCG:
                     lsi_set[ind] = point
                     P_point = p_norm(point)
                     gradient = grad_P(point)
+                    hessian = hess_P(point)
             if P_point - P_x > x_hat_value:
                 x_hat = point
                 x_hat_value = P_point - P_x
@@ -196,6 +201,7 @@ class LGCG:
     def global_search(self, p_u: Callable, u: Measure, epsilon: float) -> tuple:
         p_norm = lambda x: abs(p_u(x))
         grad_P = lambda x: self.grad_P(x, u)
+        hess_P = lambda x: self.hess_P(x, u)
         grid = (
             np.array(
                 np.meshgrid(
@@ -224,10 +230,10 @@ class LGCG:
             for ind, (point, processing) in enumerate(zip(grid, processing_array)):
                 if processing:
                     gradient = grad_P(point)
+                    hessian = hess_P(point)
                     if np.linalg.norm(gradient) < self.machine_precision:
                         processing_array[ind] = False
                         continue
-                    hessian = np.matmul(np.array([gradient]).T, np.array([gradient]))
                     d = np.linalg.solve(hessian, -gradient)  # Newton step
                     new_point = self.project_into_omega(point + d)
                     if p_norm(new_point) <= p_norm(point):
@@ -258,7 +264,7 @@ class LGCG:
         sign = np.sign(p_u(xi))
         for x, c in zip(u.support, u.coefficients):
             if (
-                x not in old_V
+                all([not np.array_equal(x, arr) for arr in old_V])
                 and np.sign(c) == sign
                 and np.linalg.norm(x - xi) < 2 * self.R
             ):
@@ -285,7 +291,7 @@ class LGCG:
             all_V += V_x
         # Add unused old supports and coefficients
         for x, c in zip(u.support, u.coefficients):
-            if x not in all_V:
+            if all([not np.array_equal(x, arr) for arr in all_V]):
                 new_support.append(x)
                 new_coefficients.append(c)
         return Measure(new_support, new_coefficients)
@@ -329,11 +335,11 @@ class LGCG:
                 max_P_A = max([abs(p_u(x)) for x in u.support])
                 true_Psi = self.Psi(u, p_u)
                 logging.info(
-                    f"{k}: {choice}, support: {len(u.support)}, Phi_k: {Phi_k}"
+                    f"{k-1}: {choice}, support: {len(u.support)}, Phi_k: {Phi_k}"
                 )
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
-            x_hat_lsi, x_check_lsi, x_tilde_lsi, lsi_set, lsi_valid = self.lsi(
+            x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = self.lsi(
                 p_u, u, epsilon, true_Psi
             )
             x_k = np.array([])
@@ -412,7 +418,33 @@ class LGCG:
                 np.vstack([u_plus.support.copy(), u_plus_hat.support.copy()]), axis=0
             )
             k += 1
-        return u * self.target_norm
+        return u
+
+    def solve_exact(self, tol: float) -> Measure:
+        k = 1
+        u = Measure()
+        p_u = self.p(u)
+        x, global_valid = self.global_search(p_u, u, 1000)
+        P_value = np.abs(p_u(x))
+        while len(u.coefficients) == 0 or P_value - self.alpha > tol:
+            v = Measure(support=np.array([x]), coefficients=[1 / k])
+            u_plus = u + v
+            K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
+            ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
+            u_raw = ssn.solve(tol=self.machine_precision, u_0=u_plus.coefficients)
+            u_raw[np.abs(u_raw) < self.machine_precision] = 0
+            u = Measure(
+                support=u_plus.support[u_raw != 0].copy(),
+                coefficients=u_raw[u_raw != 0].copy(),
+            )
+            p_u = self.p(u)
+            x, global_valid = self.global_search(p_u, u, 1000)
+            P_value = np.abs(p_u(x))
+            logging.info(
+                f"{k}: P_value:{P_value:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}"
+            )
+            k += 1
+        return u
 
     def local_clustering(self, u: Measure, p_u: Callable) -> tuple:
         sorting_values = [0] * len(u.support)
