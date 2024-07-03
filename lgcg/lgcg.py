@@ -60,7 +60,7 @@ class LGCG:
         self.R = R
         self.grad_j = grad_j
         self.hess_j = hess_j
-        self.machine_precision = 1e-15
+        self.machine_precision = 1e-12
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
         return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
@@ -296,7 +296,7 @@ class LGCG:
                 new_coefficients.append(c)
         return Measure(new_support, new_coefficients)
 
-    def solve(self, tol: float) -> Measure:
+    def solve(self, tol: float) -> tuple:
         u = Measure()
         support_plus = np.array([])
         u_plus = Measure()
@@ -308,6 +308,9 @@ class LGCG:
         Psi_k = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
         Phi_k = 1
         k = 1
+        s = 1
+        Phi_ks = [Phi_k]
+        objective_values = [self.j(u)]
         while Phi_k > tol:
             if k > 1:
                 # Low-dimensional step
@@ -324,7 +327,9 @@ class LGCG:
                 # Peform SSN
                 K_support = np.transpose(np.array([self.k(x) for x in u_start.support]))
                 ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
-                u_raw = ssn.solve(tol=Psi_k, u_0=u_start.coefficients)
+                u_raw = ssn.solve(
+                    tol=max(Psi_k, self.machine_precision), u_0=u_start.coefficients
+                )
                 u_raw[np.abs(u_raw) < self.machine_precision] = 0
                 # Reconstruct u
                 u = Measure(
@@ -407,28 +412,56 @@ class LGCG:
                 / np.sqrt(self.gamma)
                 + 4 * Psi_k
             )
-            if constant > Phi_k:
+            if constant > Phi_k and Psi_k > self.machine_precision:
                 # recompute step
                 Psi_k = min(Psi_k / 2, Phi_k**2)
                 logging.info(
-                    f"Recompute, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
+                    f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
                 )
+                s += 1
                 continue
             support_plus = np.unique(
                 np.vstack([u_plus.support.copy(), u_plus_hat.support.copy()]), axis=0
             )
             k += 1
-        return u
+            Phi_ks.append(Phi_k)
+            objective_values.append(self.j(u))
+        return u, Phi_ks, objective_values
 
-    def solve_exact(self, tol: float) -> Measure:
+    def cluster_exact(self, u, radius) -> Measure:
+        if not len(u.coefficients):
+            return u
+        new_support = []
+        new_coefs = []
+        for i, point in enumerate(u.support):
+            added = False
+            for j, other_point in enumerate(new_support):
+                if np.linalg.norm(point - other_point) < radius:
+                    new_support[j] = 0.5 * (point + other_point)
+                    new_coefs[j] = new_coefs[j] + u.coefficients[i]
+                    added = True
+                    break
+            if not added:
+                new_support.append(point)
+                new_coefs.append(u.coefficients[i])
+        return Measure(new_support, new_coefs)
+
+    def solve_exact(self, tol: float) -> tuple:
         k = 1
         u = Measure()
         p_u = self.p(u)
         x, global_valid = self.global_search(p_u, u, 1000)
         P_value = np.abs(p_u(x))
-        while len(u.coefficients) == 0 or P_value - self.alpha > tol:
-            v = Measure(support=np.array([x]), coefficients=[1 / k])
-            u_plus = u + v
+        P_values = [P_value]
+        objective_values = [self.j(u)]
+        while (
+            len(u.coefficients) == 0
+            or P_value < self.alpha
+            or P_value - self.alpha > tol
+        ):
+            eta = 4 / (k + 3)
+            v = Measure(support=np.array([x]), coefficients=[1])
+            u_plus = u * (1 - eta) + v * eta
             K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
             ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
             u_raw = ssn.solve(tol=self.machine_precision, u_0=u_plus.coefficients)
@@ -437,14 +470,17 @@ class LGCG:
                 support=u_plus.support[u_raw != 0].copy(),
                 coefficients=u_raw[u_raw != 0].copy(),
             )
+            u = self.cluster_exact(u, 0.2 * self.R)
             p_u = self.p(u)
             x, global_valid = self.global_search(p_u, u, 1000)
             P_value = np.abs(p_u(x))
             logging.info(
-                f"{k}: P_value:{P_value:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}"
+                f"{k}: P_value:{P_value-self.alpha:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}"
             )
             k += 1
-        return u
+            P_values.append(P_value)
+            objective_values.append(self.j(u))
+        return u, P_values, objective_values
 
     def local_clustering(self, u: Measure, p_u: Callable) -> tuple:
         sorting_values = [0] * len(u.support)
@@ -492,6 +528,7 @@ class LGCG:
             )
             / (4 * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)),
         )
+        # nu = 1
         update_direction = np.linalg.solve(hess_j_z, grad_j_z)
         # Transform vector into tuples
         coefs -= nu * update_direction[-len(coefs) :]
@@ -505,7 +542,7 @@ class LGCG:
         u_plus = Measure(points, coefs)
         return u_plus
 
-    def solve_newton(self, tol: float) -> Measure:
+    def solve_newton(self, tol: float, clustering_frequency=5) -> tuple:
         u = Measure()
         p_u = self.p(u)
         epsilon = self.j(u) / self.M
@@ -514,24 +551,17 @@ class LGCG:
         k = 1
         steps_since_clustering = 0
         last_value_clustering = self.j(u)
-        while True:
+        grad_norm = 1
+        grad_norms = [grad_norm]
+        objective_values = [self.j(u)]
+        while grad_norm > tol:
+            # Newton step
             if len(u.coefficients):
-                c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
-                c_points = list(c_points)
-                c_coefs = list(c_coefs)
-                grad_j_z = self.grad_j(c_points, c_coefs)
-                grad_norm = np.linalg.norm(grad_j_z)
-                if grad_norm < tol:
-                    # Stopping criterion
-                    break
-                if self.j(u) < last_value_clustering and steps_since_clustering > 10:
-                    # Force clustering
-                    last_value_clustering = self.j(u)
-                    steps_since_clustering = 0
-                    u = Measure(c_points, c_coefs)
                 u_tilde_plus = self.compute_newton_step(c_points, c_coefs)
             else:
                 u_tilde_plus = u
+
+            # GCG step
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             x_k, global_valid = self.global_search(p_u, u, epsilon)
@@ -569,13 +599,31 @@ class LGCG:
                 support=u_plus.support[u_raw != 0].copy(),
                 coefficients=u_raw[u_raw != 0].copy(),
             )
+            p_u = self.p(u)
             if choice == "newton":
                 last_value_clustering = self.j(u)
-            p_u = self.p(u)
-            if k == 1:
-                grad_norm = "N/A"
-            logging.info(
-                f"{k}: {choice}, support: {len(u.support)}, grad_norm:{grad_norm}"
-            )
+
+            if len(u.coefficients):
+                c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
+                c_points = list(c_points)
+                c_coefs = list(c_coefs)
+                grad_j_z = self.grad_j(c_points, c_coefs)
+                grad_norm = np.linalg.norm(grad_j_z)
+                if (
+                    self.j(u) < last_value_clustering
+                    and steps_since_clustering > clustering_frequency
+                ):
+                    # Force clustering
+                    last_value_clustering = self.j(u)
+                    steps_since_clustering = 0
+                    u = Measure(c_points, c_coefs)
+
+            logging.info(f"{k}: {choice}, support: {u.support}, grad_norm:{grad_norm}")
             k += 1
-        return u * self.target_norm
+            grad_norms.append(grad_norm)
+            objective_values.append(self.j(u))
+
+        # Last clustering
+        c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
+        u = Measure(c_points, c_coefs)
+        return u, grad_norms, objective_values

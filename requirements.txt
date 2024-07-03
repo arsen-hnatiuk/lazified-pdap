@@ -6,6 +6,7 @@ _openmp_mutex=5.1=1_gnu
 asttokens=2.0.5=pyhd3eb1b0_0
 black=23.11.0=py310h06a4308_0
 blas=1.0=mkl
+bottleneck=1.3.7=py310ha9d4c09_0
 brotli=1.0.9=h5eee18b_7
 brotli-bin=1.0.9=h5eee18b_7
 bzip2=1.0.8=h5eee18b_5
@@ -87,11 +88,13 @@ mysql=5.7.24=h721c034_2
 ncurses=6.4=h6a678d5_0
 nest-asyncio=1.6.0=py310h06a4308_0
 nodeenv=1.7.0=py310h06a4308_0
+numexpr=2.8.7=py310h85018f9_0
 numpy=1.26.4=py310h5f9d8c6_0
 numpy-base=1.26.4=py310hb5e798b_0
 openjpeg=2.4.0=h3ad879b_0
-openssl=3.0.13=h7f8727e_2
+openssl=3.0.14=h5eee18b_0
 packaging=23.1=py310h06a4308_0
+pandas=2.2.2=py310h6a678d5_0
 parso=0.8.3=pyhd3eb1b0_0
 pathspec=0.10.3=py310h06a4308_0
 pcre2=10.42=hebb0a14_0
@@ -113,6 +116,8 @@ pyqt=5.15.10=py310h6a678d5_0
 pyqt5-sip=12.13.0=py310h5eee18b_0
 python=3.10.13=h955ad1f_0
 python-dateutil=2.8.2=pyhd3eb1b0_0
+python-tzdata=2023.3=pyhd3eb1b0_0
+pytz=2024.1=py310h06a4308_0
 pyyaml=6.0.1=py310h5eee18b_0
 pyzmq=25.1.2=py310h6a678d5_0
 qt-main=5.15.2=h53bd1ea_10

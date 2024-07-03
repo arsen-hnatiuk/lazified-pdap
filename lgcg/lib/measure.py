@@ -9,8 +9,8 @@ class Measure:
         support: np.ndarray = np.array([]),
         coefficients: np.ndarray = np.array([]),
     ) -> None:
-        self.support = np.unique(np.array(support), axis=0)
-        self.coefficients = np.array(coefficients)
+        self.support, index = np.unique(np.array(support), axis=0, return_index=True)
+        self.coefficients = np.array(coefficients)[index]
         assert len(self.support) == len(
             self.coefficients
         ), "The support and coefficients must have the same length"
@@ -18,11 +18,16 @@ class Measure:
     def add_zero_support(self, support_plus: np.ndarray) -> None:
         # Given an array of points, add them to the support with coefficient 0
         for point in support_plus:
-            if point not in self.support:
-                if len(self.support.shape) == 1:
-                    self.support = np.array([point])
-                else:
-                    self.support = np.vstack([self.support, point])
+            if len(self.support.shape) == 1:  # No support
+                self.support = np.array([point])
+                self.coefficients = np.append(self.coefficients, 0)
+            elif all(
+                [
+                    not np.array_equal(point, support_point)
+                    for support_point in self.support
+                ]
+            ):
+                self.support = np.vstack([self.support, point])
                 self.coefficients = np.append(self.coefficients, 0)
 
     def duality_pairing(self, fct: Callable) -> float:
@@ -53,3 +58,8 @@ class Measure:
             support=self.support.copy(), coefficients=self.coefficients.copy() * other
         )
         return new
+
+    def __str__(self):
+        return (
+            f"Measure with support {self.support} and coefficients {self.coefficients}"
+        )
