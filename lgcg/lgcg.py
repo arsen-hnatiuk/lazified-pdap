@@ -298,8 +298,7 @@ class LGCG:
 
     def solve(self, tol: float) -> tuple:
         u = Measure()
-        support_plus = np.array([])
-        u_plus = Measure()
+        u_plus_tilde = Measure()
         u_plus_hat = Measure()
         p_u = self.p(u)
         max_P_A = 0
@@ -307,41 +306,38 @@ class LGCG:
         epsilon = self.j(u) / self.M
         Psi_k = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
         Phi_k = 1
+        choice = "N/A"
         k = 1
         s = 1
         Phi_ks = [Phi_k]
         objective_values = [self.j(u)]
+        steps = []
         while Phi_k > tol:
             if k > 1:
                 # Low-dimensional step
-                if self.j(u_plus) < self.j(u_plus_hat):
-                    u_start = Measure(u_plus.support.copy(), u_plus.coefficients.copy())
+                if self.j(u_plus_tilde) < self.j(u_plus_hat):
+                    u_plus = u_plus_tilde * 1
                     choice = "GCG"
                 else:
-                    u_start = Measure(
-                        u_plus_hat.support.copy(), u_plus_hat.coefficients.copy()
-                    )
+                    u_plus = u_plus_hat * 1
                     choice = "LSI"
-                # Insert zero coefficients to unsupported positions
-                u_start.add_zero_support(support_plus)
                 # Peform SSN
-                K_support = np.transpose(np.array([self.k(x) for x in u_start.support]))
+                K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
                 ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
                 u_raw = ssn.solve(
-                    tol=max(Psi_k, self.machine_precision), u_0=u_start.coefficients
+                    tol=max(Psi_k, self.machine_precision), u_0=u_plus.coefficients
                 )
                 u_raw[np.abs(u_raw) < self.machine_precision] = 0
                 # Reconstruct u
                 u = Measure(
-                    support=u_start.support[u_raw != 0].copy(),
+                    support=u_plus.support[u_raw != 0].copy(),
                     coefficients=u_raw[u_raw != 0].copy(),
                 )
                 p_u = self.p(u)
                 max_P_A = max([abs(p_u(x)) for x in u.support])
                 true_Psi = self.Psi(u, p_u)
-                logging.info(
-                    f"{k-1}: {choice}, support: {len(u.support)}, Phi_k: {Phi_k}"
-                )
+
+            # Find new support points
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = self.lsi(
@@ -353,35 +349,7 @@ class LGCG:
                 # TODO implement stopping for global search e.g. if u_hat chosen last iteration
             else:
                 x_k = x_tilde_lsi
-            v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
-            if not (len(x_tilde_lsi) or global_valid):
-                if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
-                    u_plus = u * (1 - eta)
-                elif self.explicit_Phi(p_u, u, v) >= 0:
-                    eta_local = self.explicit_Phi(p_u, u, v) / self.C
-                    u_plus = u * (1 - eta_local) + v * eta_local
-                else:
-                    u_plus = u * 1  # Create a new measure with the same parameters
-            else:
-                u_plus = u * (1 - eta) + v * eta
-            if lsi_valid:
-                v_hat = self.local_measure_constructor(p_u, u, x_hat_lsi, lsi_set)
-                nu_constant = (
-                    2
-                    * self.M
-                    * (
-                        32
-                        * self.L
-                        * self.M**2
-                        * self.norm_K_star_L**2
-                        * (1 + self.L * self.norm_K_star / (2 * np.sqrt(self.gamma)))
-                        / self.theta
-                    )
-                )
-                nu = min(1, 3 * abs(v_hat.coefficients[0]) / nu_constant)
-                u_plus_hat = u * (1 - nu) + v_hat * nu
-            else:
-                u_plus_hat = u_plus * 1  # Create a new measure with the same parameters
+
             # Build Phi_k
             if lsi_valid:
                 Phi_k = (
@@ -402,30 +370,66 @@ class LGCG:
                         self.M * (max(0, abs(p_u(x_k)) - max(self.alpha, max_P_A)))
                         + true_Psi
                     )
+
+            # Prepare and check for recompute
             constant = (
-                8
+                12
                 * self.M
                 * self.L
                 * self.norm_K_star
-                * max(3, 16 * self.L * self.M**2 * self.norm_K_star_L / self.theta)
                 * np.sqrt(Psi_k)
                 / np.sqrt(self.gamma)
-                + 4 * Psi_k
+                + 2 * Psi_k
             )
             if constant > Phi_k and Psi_k > self.machine_precision:
-                # recompute step
+                # Recompute step and updae running metrics
                 Psi_k = min(Psi_k / 2, Phi_k**2)
                 logging.info(
                     f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
                 )
+                Phi_ks.append(Phi_k)
+                objective_values.append(self.j(u))
+                steps.append("recompute")
                 s += 1
                 continue
-            support_plus = np.unique(
-                np.vstack([u_plus.support.copy(), u_plus_hat.support.copy()]), axis=0
-            )
-            k += 1
+
+            # Normal step, construct new iterate
+            v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
+            if not (len(x_tilde_lsi) or global_valid):
+                if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
+                    u_plus_tilde = u * (1 - eta)
+                elif self.explicit_Phi(p_u, u, v) >= 0:
+                    eta_local = self.explicit_Phi(p_u, u, v) / self.C
+                    u_plus_tilde = u * (1 - eta_local) + v * eta_local
+                else:
+                    u_plus_tilde = (
+                        u * 1
+                    )  # Create a new measure with the same parameters
+            else:
+                u_plus_tilde = u * (1 - eta) + v * eta
+            if lsi_valid:
+                v_hat = self.local_measure_constructor(p_u, u, x_hat_lsi, lsi_set)
+                nu_constant = 4 * (
+                    32
+                    * self.L
+                    * self.M**2
+                    * self.norm_K_star_L**2
+                    * (1 + self.L * self.norm_K_star / (np.sqrt(self.gamma)))
+                    / self.theta
+                )
+                nu = min(1, abs(v_hat.coefficients[0]) / nu_constant)
+                u_plus_hat = u * (1 - nu) + v_hat * nu
+            else:
+                u_plus_hat = (
+                    u_plus_tilde * 1
+                )  # Create a new measure with the same parameters
+
+            # Update running metrics
             Phi_ks.append(Phi_k)
             objective_values.append(self.j(u))
+            steps.append("normal")
+            logging.info(f"{k}: {choice}, Phi_k: {Phi_k}, support: {u.support}")
+            k += 1
         return u, Phi_ks, objective_values
 
     def cluster_exact(self, u, radius) -> Measure:
