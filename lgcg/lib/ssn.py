@@ -1,8 +1,8 @@
 # An implementation of the semismooth Newton method following https://epubs.siam.org/doi/epdf/10.1137/120892167
+# And Section 3 of https://mediatum.ub.tum.de/doc/1241413/1241413.pdf
 
 import numpy as np
 import logging
-from functools import lru_cache
 from lib.default_values import *
 
 logging.basicConfig(
@@ -16,42 +16,15 @@ class SSN:
     ) -> None:
         self.K = K
         if all(self.K.shape):
+            self.machine_precision = 1e-12
             self.target = target
             self.alpha = alpha
-            self.beta = 0.1
-            self.tau = 4
-            self.gamma_filter = 0.07
             self.g = get_default_g(self.alpha)
             self.f = get_default_f(self.K, self.target)
-            self.p_callable = get_default_p(self.K, self.target)  # -f'
-            self.second_derivative = np.matmul(np.transpose(self.K), self.K)
+            self.p = get_default_p(self.K, self.target)  # -f'
+            self.hessian = get_default_hessian(self.K)
             self.j = lambda u: self.f(u) + self.g(u)
-            self.L = 1
-            self.norm_K_star = np.max(
-                [np.linalg.norm(row) for row in np.transpose(self.K)]
-            )  # the 2,inf norm of K*
-            self.gamma = 1
             self.M = M
-
-    def p(self, u: np.ndarray) -> np.ndarray:
-        return self.p_callable(u)
-
-    def projector(self, u: np.ndarray, factor: float = 1) -> np.ndarray:
-        # Projecion of an array onto [-alpha, alpha]
-        return np.minimum(factor * self.alpha, np.maximum(-factor * self.alpha, u))
-
-    def F(self, u: np.ndarray) -> np.ndarray:
-        g = -self.p(u)
-        return g - self.projector(u=g - u / self.tau)
-
-    def theta(self, u: np.ndarray) -> np.ndarray:
-        return np.absolute(self.F(u))
-
-    def G(self, u: np.ndarray) -> np.ndarray:
-        return u + self.tau * self.p(u)
-
-    def S(self, u: np.ndarray) -> np.ndarray:
-        return u - self.projector(u, self.tau)
 
     def Psi(self, u: np.ndarray) -> np.ndarray:
         # sup_v <p(u),v-u>+g(u)-g(v)
@@ -60,71 +33,84 @@ class SSN:
         variable_part = max(0, self.M * (np.max(np.absolute(p)) - self.alpha))
         return constant_part + variable_part
 
-    def delta(self, u: np.ndarray, d: np.ndarray) -> np.ndarray:
-        # -p(u)^T d + alpha(||S(G(u))||_1-||u||_1)
-        return np.matmul(-self.p(u), d) + self.alpha * (
-            np.linalg.norm(self.S(self.G(u)), ord=1) - np.linalg.norm(u, ord=1)
-        )
+    def prox(self, q: np.ndarray, alpha: float) -> np.ndarray:
+        to_return = np.zeros(q.shape)
+        for i, val in enumerate(q):
+            if np.abs(val) > alpha:
+                to_return[i] = val - alpha * np.sign(val)
+        return to_return
 
-    def armijo(self, u: np.ndarray, d: np.ndarray) -> float:
-        # Armijo step size
-        delta = self.delta(u, d)
-        step_size = 1
-        while self.j(u + step_size * d) - self.j(u) > step_size * 0.1 * delta:
-            step_size *= self.beta
-        return step_size
+    def grad_prox(self, q: np.ndarray, alpha: float) -> np.ndarray:
+        return np.diag(np.where(np.abs(q) > alpha, 1, 0))
+
+    def rebalance(self, tol: float, u_0: np.ndarray) -> np.ndarray:
+        # Algorithm makes no progress, probably singular hessian
+        # Remove columns to assure better stability
+        logging.debug("Rebalancing columns")
+        size = self.K.shape[1]
+        K_candidate = self.K.copy()
+        value_candidate = min(np.linalg.eigvals(K_candidate.T @ K_candidate))
+        index_candidate = -1
+        for i in range(size):
+            indices = [j for j in range(size) if j != i]
+            new_K = self.K.T[indices].T
+            value = min(np.linalg.eigvals(new_K.T @ new_K))
+            if value > value_candidate:
+                K_candidate = new_K
+                value_candidate = value
+                index_candidate = i
+        if index_candidate == -1:
+            logging.warning("SSN failed to converge")
+            return
+        new_ssn = SSN(K_candidate, self.alpha, self.target, self.M)
+        new_solution = new_ssn.solve(
+            tol, u_0[[j for j in range(size) if j != index_candidate]]
+        )
+        new_solution_left = new_solution[:index_candidate]
+        new_solution_right = new_solution[index_candidate:]
+        adjusted_solution = (
+            new_solution_left.tolist() + [0] + new_solution_right.tolist()
+        )
+        return np.array(adjusted_solution)
 
     def solve(self, tol: float, u_0: np.ndarray) -> np.ndarray:
-        # Semismooth Newton method (globalized)
+        # Semismooth Newton method (globalized via line search)
         if not all(self.K.shape):
             logging.debug("Empty input space, retuning u_0")
             return u_0
-        u = u_0
-        initial_j = self.j(u)
-        filter = [self.theta(u)]
+        theta = tol  # Set initial value for the step length parameter
+        Id = np.identity(len(u_0))
+        initial_j = self.j(u_0)
+        q = u_0 + self.p(u_0)
+        prox_q = self.prox(q, self.alpha)  # The actual iterate
         k = 0
-        while self.Psi(u) > tol or self.j(u) > initial_j:
+        while self.Psi(prox_q) > tol or self.j(prox_q) > initial_j:
+            right_hand = q - prox_q - self.p(prox_q)
+            left_hand = Id + (self.hessian - Id) @ self.grad_prox(q, self.alpha)
+            theta = theta / 10
+            direction = np.linalg.solve(left_hand + theta * Id, right_hand)
+            qnew = q - direction
+            prox_qnew = self.prox(qnew, self.alpha)
+
+            # Backtracking line search
+            qdiff = self.j(prox_qnew) - self.j(prox_q)
+            while qdiff >= tol:
+                theta = 2 * theta
+                direction = np.linalg.solve(left_hand + theta * Id, right_hand)
+                qnew = q - direction
+                prox_qnew = self.prox(qnew, self.alpha)
+                qdiff = self.j(prox_qnew) - self.j(prox_q)
+
+            q = qnew
+            prox_q = prox_qnew
             k += 1
-
-            # Semismooth Newton step
-            condition = np.absolute(-self.p(u) - u) > self.alpha
-            cal_A = np.where(condition)[0]
-            cal_I = np.where(~condition)[0]
-            F_value = self.F(u)
-            s_I = -self.tau * F_value[cal_I]
-            s_A = np.linalg.lstsq(
-                self.second_derivative[np.ix_(cal_A, cal_A)]
-                + np.linalg.norm(F_value) * np.eye(len(cal_A)),
-                -F_value[cal_A]
-                - np.matmul(self.second_derivative[np.ix_(cal_A, cal_I)], s_I),
-                rcond=None,
-            )[0]
-            s = np.zeros(len(u))
-            s[cal_A] = s_A
-            s[cal_I] = s_I
-
-            # Check if filter accepts SSN step
-            u_ssn = u + s
-            theta_snn = self.theta(u_ssn)
-            accepted = True
-            for q in filter:
-                if np.max(q - theta_snn) < self.gamma_filter * np.max(theta_snn):
-                    accepted = False
-                    break
-            if accepted:
-                filter.append(self.theta(u_ssn))
-                u = u_ssn
-                continue
-
-            # Global Armijo step
-            d = self.S(self.G(u)) - u
-            step_size = self.armijo(u, d)
-            u = u + step_size * d
+            # if k > 1000:
+            #     return self.rebalance(tol, u_0)
 
         logging.debug(
-            f"SSN in {len(u)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
+            f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
         )
-        return u
+        return prox_q
 
 
 # if __name__ == "__main__":
@@ -132,4 +118,4 @@ class SSN:
 #     u = np.array([-1, -1, -1])
 #     y = np.array([1, 0, 4])
 #     sn = SSN(K, 1, y, 20)
-#     sn.solve(0.001, u)
+#     print(sn.solve(1e-12, u))

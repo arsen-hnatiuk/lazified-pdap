@@ -33,7 +33,7 @@ class LGCG:
         bar_m: float,
         L: float,
         R: float,
-        global_search_resolution: float = 15,
+        global_search_resolution: float = 10,
     ) -> None:
         self.target = target
         self.k = k
@@ -55,12 +55,13 @@ class LGCG:
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
         self.u_0 = Measure()
-        self.M = self.j(self.u_0) / self.alpha  # Bound on the norm of iterates
+        self.M = min(self.j(self.u_0) / self.alpha, 10)  # Bound on the norm of iterates
         self.C = 4 * self.L * self.M**2 * self.norm_K_star**2
         self.R = R
         self.grad_j = grad_j
         self.hess_j = hess_j
         self.machine_precision = 1e-12
+        self.stop_search = 5
 
     def update_epsilon(self, eta: float, epsilon: float) -> float:
         return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
@@ -119,10 +120,11 @@ class LGCG:
             condition = (max(0, P_point - max(self.alpha, max_P_A)) + Psi / self.M) / (
                 4 * self.R
             )
+            point_steps = 0
             while (
                 P_point - P_x < 2 * self.R * np.linalg.norm(gradient)
                 or np.linalg.norm(gradient) > condition
-            ):
+            ) and point_steps < self.stop_search:
                 d = np.linalg.solve(hessian, -gradient)  # Newton step
                 point = point + d
                 if np.linalg.norm(
@@ -144,7 +146,9 @@ class LGCG:
                 condition = (
                     max(0, P_point - max(self.alpha, max_P_A)) + Psi / self.M
                 ) / (4 * self.R)
+                point_steps += 1
             if not len(x_tilde):  # Look for point satisfying Phi >= M*epsilon
+                point_steps = 0
                 while (
                     self.M
                     * (
@@ -154,7 +158,7 @@ class LGCG:
                     )
                     + Psi
                     > self.M * epsilon
-                ):
+                ) and point_steps < self.stop_search:
                     if (
                         self.M * (P_point - max(max_P_A, self.alpha)) + Psi
                         >= self.M * epsilon
@@ -179,6 +183,7 @@ class LGCG:
                     P_point = p_norm(point)
                     gradient = grad_P(point)
                     hessian = hess_P(point)
+                    point_steps += 1
             if P_point - P_x > x_hat_value:
                 x_hat = point
                 x_hat_value = P_point - P_x
@@ -198,7 +203,8 @@ class LGCG:
             x[dimension] = min(max(x[dimension], bounds[0]), bounds[1])
         return x
 
-    def global_search(self, p_u: Callable, u: Measure, epsilon: float) -> tuple:
+    def global_search(self, u: Measure, epsilon: float) -> tuple:
+        p_u = self.p(u)
         p_norm = lambda x: abs(p_u(x))
         grad_P = lambda x: self.grad_P(x, u)
         hess_P = lambda x: self.hess_P(x, u)
@@ -226,7 +232,8 @@ class LGCG:
         processing_array = [
             True for point in grid
         ]  # If the point is still beign optimized
-        while any(processing_array):
+        point_steps = 0
+        while any(processing_array) and point_steps < self.stop_search:
             for ind, (point, processing) in enumerate(zip(grid, processing_array)):
                 if processing:
                     gradient = grad_P(point)
@@ -251,6 +258,7 @@ class LGCG:
                             >= self.M * epsilon
                         ):
                             return new_point, True  # Found a desired point
+            point_steps += 1
         values = np.array([p_norm(point) for point in grid])
         ind = np.argmax(values)
         return (
@@ -345,7 +353,7 @@ class LGCG:
             )
             x_k = np.array([])
             if not len(x_tilde_lsi):
-                x_k, global_valid = self.global_search(p_u, u, epsilon)
+                x_k, global_valid = self.global_search(u, epsilon)
                 # TODO implement stopping for global search e.g. if u_hat chosen last iteration
             else:
                 x_k = x_tilde_lsi
@@ -454,7 +462,7 @@ class LGCG:
         k = 1
         u = Measure()
         p_u = self.p(u)
-        x, global_valid = self.global_search(p_u, u, 1000)
+        x, global_valid = self.global_search(u, 1000)
         P_value = np.abs(p_u(x))
         P_values = [P_value]
         objective_values = [self.j(u)]
@@ -474,16 +482,19 @@ class LGCG:
                 support=u_plus.support[u_raw != 0].copy(),
                 coefficients=u_raw[u_raw != 0].copy(),
             )
-            u = self.cluster_exact(u, 0.2 * self.R)
+            # u = self.cluster_exact(u, 1e-4)
             p_u = self.p(u)
-            x, global_valid = self.global_search(p_u, u, 1000)
+            x, global_valid = self.global_search(u, 1000)
             P_value = np.abs(p_u(x))
             logging.info(
-                f"{k}: P_value:{P_value-self.alpha:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}"
+                f"{k}: P_value:{P_value-self.alpha:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}, valid: {global_valid}"
             )
+            logging.info("==============================================")
             k += 1
             P_values.append(P_value)
             objective_values.append(self.j(u))
+            # if k == 25:
+            #     return p_u, u, P_values, objective_values
         return u, P_values, objective_values
 
     def local_clustering(self, u: Measure, p_u: Callable) -> tuple:
@@ -518,7 +529,9 @@ class LGCG:
                 clustered_tuples.append((x, coefficient))
         return clustered_tuples
 
-    def compute_newton_step(self, points: np.ndarray, coefs: np.ndarray) -> Measure:
+    def compute_newton_step(
+        self, points: np.ndarray, coefs: np.ndarray, damped: bool
+    ) -> Measure:
         grad_j_z = self.grad_j(points, coefs)
         hess_j_z = self.hess_j(points, coefs)
         nu = min(
@@ -532,21 +545,23 @@ class LGCG:
             )
             / (4 * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)),
         )
-        # nu = 1
+        if not damped:
+            nu = 1
         update_direction = np.linalg.solve(hess_j_z, grad_j_z)
         # Transform vector into tuples
         coefs -= nu * update_direction[-len(coefs) :]
         for i, point in enumerate(points):
-            points[i] -= (
+            new_point = point - (
                 nu
                 * update_direction[
                     i * self.Omega.shape[0] : (i + 1) * self.Omega.shape[0]
                 ]
             )
+            points[i] = self.project_into_omega(new_point)
         u_plus = Measure(points, coefs)
         return u_plus
 
-    def solve_newton(self, tol: float, clustering_frequency=5) -> tuple:
+    def solve_newton(self, tol: float, clustering_frequency=5, damped=True) -> tuple:
         u = Measure()
         p_u = self.p(u)
         epsilon = self.j(u) / self.M
@@ -558,17 +573,17 @@ class LGCG:
         grad_norm = 1
         grad_norms = [grad_norm]
         objective_values = [self.j(u)]
-        while grad_norm > tol:
+        while grad_norm > max(tol, tol / self.m):
             # Newton step
             if len(u.coefficients):
-                u_tilde_plus = self.compute_newton_step(c_points, c_coefs)
+                u_tilde_plus = self.compute_newton_step(c_points, c_coefs, damped)
             else:
                 u_tilde_plus = u
 
             # GCG step
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
-            x_k, global_valid = self.global_search(p_u, u, epsilon)
+            x_k, global_valid = self.global_search(u, epsilon)
             v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
             if not global_valid:
                 if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
@@ -622,7 +637,9 @@ class LGCG:
                     steps_since_clustering = 0
                     u = Measure(c_points, c_coefs)
 
-            logging.info(f"{k}: {choice}, support: {u.support}, grad_norm:{grad_norm}")
+            logging.info(
+                f"{k}: {choice}, support: {u.support}, grad_norm:{grad_norm}, objective: {self.j(u)}"
+            )
             k += 1
             grad_norms.append(grad_norm)
             objective_values.append(self.j(u))
