@@ -534,18 +534,19 @@ class LGCG:
     ) -> Measure:
         grad_j_z = self.grad_j(points, coefs)
         hess_j_z = self.hess_j(points, coefs)
-        nu = min(
-            1,
-            (
-                -self.m
-                + np.sqrt(
-                    self.m**2
-                    + 8 * self.m * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)
+        if damped:
+            nu = min(
+                1,
+                (
+                    -self.m
+                    + np.sqrt(
+                        self.m**2
+                        + 8 * self.m * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)
+                    )
                 )
+                / (4 * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)),
             )
-            / (4 * self.L * self.bar_m**3 * np.linalg.norm(grad_j_z)),
-        )
-        if not damped:
+        else:
             nu = 1
         update_direction = np.linalg.solve(hess_j_z, grad_j_z)
         # Transform vector into tuples
@@ -581,32 +582,41 @@ class LGCG:
                 u_tilde_plus = u
 
             # GCG step
-            eta = 4 / (k + 3)
-            epsilon = self.update_epsilon(eta, epsilon)
-            x_k, global_valid = self.global_search(u, epsilon)
-            v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
-            if not global_valid:
-                if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
-                    u_hat_plus = u * (1 - eta)
-                elif self.explicit_Phi(p_u, u, v) >= 0:
-                    eta_local = self.explicit_Phi(p_u, u, v) / self.C
-                    u_hat_plus = u * (1 - eta_local) + v * eta_local
+            if grad_norm > 1e-8:
+                eta = 4 / (k + 3)
+                epsilon = self.update_epsilon(eta, epsilon)
+                x_k, global_valid = self.global_search(u, epsilon)
+                v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
+                if not global_valid:
+                    if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
+                        u_hat_plus = u * (1 - eta)
+                    elif self.explicit_Phi(p_u, u, v) >= 0:
+                        eta_local = self.explicit_Phi(p_u, u, v) / self.C
+                        u_hat_plus = u * (1 - eta_local) + v * eta_local
+                    else:
+                        u_hat_plus = (
+                            u * 1
+                        )  # Create a new measure with the same parameters
                 else:
-                    u_hat_plus = u * 1  # Create a new measure with the same parameters
+                    u_hat_plus = u * (1 - eta) + v * eta
             else:
-                u_hat_plus = u * (1 - eta) + v * eta
+                u_hat_plus = u * 1
 
-            if self.j(u_hat_plus) < self.j(u_tilde_plus):
+            if (
+                self.j(u_hat_plus) > self.j(u_tilde_plus)
+                or abs(self.j(u_hat_plus) - self.j(u_tilde_plus))
+                < self.machine_precision
+            ):
+                choice = "newton"
+                u_plus = u_tilde_plus
+                local_Psi = Psi_1
+                steps_since_clustering = 0
+            else:
                 choice = "gcg"
                 u_plus = u_hat_plus
                 local_Psi = Psi_k
                 Psi_k = max(Psi_k / 2, self.machine_precision)
                 steps_since_clustering += 1
-            else:
-                choice = "newton"
-                u_plus = u_tilde_plus
-                local_Psi = Psi_1
-                steps_since_clustering = 0
 
             # Low-dimensional step
             K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
@@ -638,7 +648,7 @@ class LGCG:
                     u = Measure(c_points, c_coefs)
 
             logging.info(
-                f"{k}: {choice}, support: {u.support}, grad_norm:{grad_norm}, objective: {self.j(u)}"
+                f"{k}: {choice}, support: {u.support}, coefs: {u.coefficients}, grad_norm:{grad_norm:.3E}, objective: {self.j(u):.3E}"
             )
             k += 1
             grad_norms.append(grad_norm)

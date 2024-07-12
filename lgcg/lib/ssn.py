@@ -43,7 +43,7 @@ class SSN:
     def grad_prox(self, q: np.ndarray, alpha: float) -> np.ndarray:
         return np.diag(np.where(np.abs(q) > alpha, 1, 0))
 
-    def rebalance(self, tol: float, u_0: np.ndarray) -> np.ndarray:
+    def rebalance(self, tol: float, current_u: np.ndarray) -> np.ndarray:
         # Algorithm makes no progress, probably singular hessian
         # Remove columns to assure better stability
         logging.debug("Rebalancing columns")
@@ -64,7 +64,7 @@ class SSN:
             return
         new_ssn = SSN(K_candidate, self.alpha, self.target, self.M)
         new_solution = new_ssn.solve(
-            tol, u_0[[j for j in range(size) if j != index_candidate]]
+            tol, current_u[[j for j in range(size) if j != index_candidate]]
         )
         new_solution_left = new_solution[:index_candidate]
         new_solution_right = new_solution[index_candidate:]
@@ -104,8 +104,8 @@ class SSN:
             q = qnew
             prox_q = prox_qnew
             k += 1
-            # if k > 1000:
-            #     return self.rebalance(tol, u_0)
+            if k > 1000:
+                return self.rebalance(tol, prox_q)
 
         logging.debug(
             f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
