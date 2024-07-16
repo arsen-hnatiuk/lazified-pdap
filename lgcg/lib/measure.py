@@ -10,7 +10,7 @@ class Measure:
         coefficients: np.ndarray = np.array([]),
     ) -> None:
         self.support, index = np.unique(np.array(support), axis=0, return_index=True)
-        self.coefficients = np.array(coefficients)[index]
+        self.coefficients = np.array(coefficients)[index].astype(float)
         assert len(self.support) == len(
             self.coefficients
         ), "The support and coefficients must have the same length"
