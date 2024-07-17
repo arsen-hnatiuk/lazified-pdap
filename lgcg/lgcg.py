@@ -203,7 +203,9 @@ class LGCG:
             x[dimension] = min(max(x[dimension], bounds[0]), bounds[1])
         return x
 
-    def global_search(self, u: Measure, epsilon: float) -> tuple:
+    def global_search(
+        self, u: Measure, epsilon: float, step_reductions: float = 20
+    ) -> tuple:
         p_u = self.p(u)
         p_norm = lambda x: abs(p_u(x))
         grad_P = lambda x: self.grad_P(x, u)
@@ -243,7 +245,19 @@ class LGCG:
                         continue
                     d = np.linalg.solve(hessian, -gradient)  # Newton step
                     new_point = self.project_into_omega(point + d)
-                    if p_norm(new_point) <= p_norm(point):
+                    reduce_step_counter = 0
+                    step = 1
+                    while (
+                        p_norm(new_point) <= p_norm(point)
+                        and reduce_step_counter < step_reductions
+                    ):
+                        step *= 0.25
+                        reduce_step_counter += 1
+                        new_point = self.project_into_omega(point + step * d)
+                    if (
+                        p_norm(new_point) <= p_norm(point)
+                        and reduce_step_counter == step_reductions
+                    ):
                         processing_array[ind] = False
                     else:
                         grid[ind] = new_point
@@ -315,6 +329,7 @@ class LGCG:
         Psi_k = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
         Phi_k = 1
         choice = "N/A"
+        global_valid = False
         k = 1
         s = 1
         Phi_ks = [Phi_k]
@@ -325,10 +340,10 @@ class LGCG:
                 # Low-dimensional step
                 if self.j(u_plus_tilde) < self.j(u_plus_hat):
                     u_plus = u_plus_tilde * 1
-                    choice = "GCG"
+                    choice = f"GCG, {global_valid}"
                 else:
                     u_plus = u_plus_hat * 1
-                    choice = "LSI"
+                    choice = f"LSI, {global_valid}"
                 # Peform SSN
                 K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
                 ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
@@ -436,7 +451,10 @@ class LGCG:
             Phi_ks.append(Phi_k)
             objective_values.append(self.j(u))
             steps.append("normal")
-            logging.info(f"{k}: {choice}, Phi_k: {Phi_k}, support: {u.support}")
+            logging.info(
+                f"{k}: {choice}, Phi_k: {Phi_k}, epsilon: {epsilon} support: {u.support}"
+            )
+            logging.info("==============================================")
             k += 1
         return u, Phi_ks, objective_values
 
@@ -487,7 +505,7 @@ class LGCG:
             x, global_valid = self.global_search(u, 1000)
             P_value = np.abs(p_u(x))
             logging.info(
-                f"{k}: P_value:{P_value-self.alpha:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}, valid: {global_valid}"
+                f"{k}: P_value:{P_value-self.alpha:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}"
             )
             logging.info("==============================================")
             k += 1
