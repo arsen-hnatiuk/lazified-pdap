@@ -90,6 +90,7 @@ class LGCG:
         u: Measure,
         epsilon: float,
         Psi: float,
+        step_reductions: float = 5,
     ) -> tuple:
         # Implementation of the local support improver
         if not len(u.support):
@@ -126,7 +127,15 @@ class LGCG:
                 or np.linalg.norm(gradient) > condition
             ) and point_steps < self.stop_search:
                 d = np.linalg.solve(hessian, -gradient)  # Newton step
-                point = point + d
+                reduce_step_counter = 0
+                step = 1
+                while (
+                    p_norm(point + step * d) < p_norm(point)
+                    and reduce_step_counter < step_reductions
+                ):
+                    step *= 0.25
+                    reduce_step_counter += 1
+                point = point + step * d
                 if np.linalg.norm(
                     point - original_point
                 ) >= 2 * self.R or not np.array_equal(
@@ -338,12 +347,12 @@ class LGCG:
         while Phi_k > tol:
             if k > 1:
                 # Low-dimensional step
-                if self.j(u_plus_tilde) < self.j(u_plus_hat):
-                    u_plus = u_plus_tilde * 1
-                    choice = f"GCG, {global_valid}"
-                else:
+                if self.j(u_plus_hat) < self.j(u_plus_tilde):
                     u_plus = u_plus_hat * 1
                     choice = f"LSI, {global_valid}"
+                else:
+                    u_plus = u_plus_tilde * 1
+                    choice = f"GCG, {global_valid}"
                 # Peform SSN
                 K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
                 ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
@@ -369,7 +378,7 @@ class LGCG:
             x_k = np.array([])
             if not len(x_tilde_lsi):
                 x_k, global_valid = self.global_search(u, epsilon)
-                # TODO implement stopping for global search e.g. if u_hat chosen last iteration
+                # In the future implement stopping for global search
             else:
                 x_k = x_tilde_lsi
 
@@ -385,6 +394,15 @@ class LGCG:
                     )
                     + true_Psi
                 )
+                if not len(x_tilde_lsi):
+                    # Check if a greater value of P hsa been found
+                    Phi_k_contender = (
+                        self.M * (max(0, abs(p_u(x_k)) - max(self.alpha, max_P_A)))
+                        + true_Psi
+                    )
+                    Phi_k = max(
+                        Phi_k, Phi_k_contender
+                    )  # Choose global max if LSI is valid prematurely
             else:
                 if len(x_tilde_lsi) or global_valid:
                     Phi_k = self.M * epsilon
@@ -405,7 +423,7 @@ class LGCG:
                 + 2 * Psi_k
             )
             if constant > Phi_k and Psi_k > self.machine_precision:
-                # Recompute step and updae running metrics
+                # Recompute step and update running metrics
                 Psi_k = min(Psi_k / 2, Phi_k**2)
                 logging.info(
                     f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
