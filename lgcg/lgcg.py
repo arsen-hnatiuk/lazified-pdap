@@ -373,11 +373,11 @@ class LGCG:
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = self.lsi(
-                p_u, u, epsilon, true_Psi
+                p_u, u, epsilon / 100, true_Psi
             )
             x_k = np.array([])
             if not len(x_tilde_lsi):
-                x_k, global_valid = self.global_search(u, epsilon)
+                x_k, global_valid = self.global_search(u, epsilon / 100)
                 # In the future implement stopping for global search
             else:
                 x_k = x_tilde_lsi
