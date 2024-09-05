@@ -12,7 +12,12 @@ logging.basicConfig(
 
 class SSN:
     def __init__(
-        self, K: np.ndarray, alpha: float, target: np.ndarray, M: float
+        self,
+        K: np.ndarray,
+        alpha: float,
+        target: np.ndarray,
+        M: float,
+        minimum_iterations: int = 0,
     ) -> None:
         self.K = K
         if all(self.K.shape):
@@ -25,6 +30,7 @@ class SSN:
             self.hessian = get_default_hessian(self.K)
             self.j = lambda u: self.f(u) + self.g(u)
             self.M = M
+            self.minimum_iterations = minimum_iterations
 
     def Psi(self, u: np.ndarray) -> np.ndarray:
         # sup_v <p(u),v-u>+g(u)-g(v)
@@ -84,28 +90,32 @@ class SSN:
         q = u_0 + self.p(u_0)
         prox_q = self.prox(q, self.alpha)  # The actual iterate
         k = 0
-        while self.Psi(prox_q) > tol or self.j(prox_q) > initial_j:
-            right_hand = q - prox_q - self.p(prox_q)
-            left_hand = Id + (self.hessian - Id) @ self.grad_prox(q, self.alpha)
-            theta = theta / 10
-            direction = np.linalg.solve(left_hand + theta * Id, right_hand)
-            qnew = q - direction
-            prox_qnew = self.prox(qnew, self.alpha)
-
-            # Backtracking line search
-            qdiff = self.j(prox_qnew) - self.j(prox_q)
-            while qdiff >= tol:
-                theta = 2 * theta
+        while k - 1 < self.minimum_iterations:
+            while self.Psi(prox_q) > tol or self.j(prox_q) > initial_j:
+                right_hand = q - prox_q - self.p(prox_q)
+                left_hand = Id + (self.hessian - Id) @ self.grad_prox(q, self.alpha)
+                theta = theta / 10
                 direction = np.linalg.solve(left_hand + theta * Id, right_hand)
                 qnew = q - direction
                 prox_qnew = self.prox(qnew, self.alpha)
-                qdiff = self.j(prox_qnew) - self.j(prox_q)
 
-            q = qnew
-            prox_q = prox_qnew
+                # Backtracking line search
+                qdiff = self.j(prox_qnew) - self.j(prox_q)
+                while qdiff >= tol:
+                    theta = 2 * theta
+                    direction = np.linalg.solve(left_hand + theta * Id, right_hand)
+                    qnew = q - direction
+                    prox_qnew = self.prox(qnew, self.alpha)
+                    qdiff = self.j(prox_qnew) - self.j(prox_q)
+
+                q = qnew
+                prox_q = prox_qnew
+                k += 1
+                if k > 1000:
+                    return prox_q
+                    # return self.rebalance(tol, prox_q)
+            tol = max(tol / 2, self.machine_precision)
             k += 1
-            if k > 1000:
-                return self.rebalance(tol, prox_q)
 
         logging.debug(
             f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"

@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+import time
 from typing import Callable
 from lib.default_values import *
 from lib.ssn import SSN
@@ -342,6 +343,9 @@ class LGCG:
         k = 1
         s = 1
         Phi_ks = [Phi_k]
+        initial_time = time.time()
+        times = [time.time() - initial_time]
+        supports = [0]
         objective_values = [self.j(u)]
         steps = []
         while Phi_k > tol:
@@ -355,7 +359,13 @@ class LGCG:
                     choice = f"GCG, {global_valid}"
                 # Peform SSN
                 K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
-                ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
+                ssn = SSN(
+                    K=K_support,
+                    alpha=self.alpha,
+                    target=self.target,
+                    M=self.M,
+                    minimum_iterations=0,
+                )
                 u_raw = ssn.solve(
                     tol=max(Psi_k, self.machine_precision), u_0=u_plus.coefficients
                 )
@@ -373,11 +383,11 @@ class LGCG:
             eta = 4 / (k + 3)
             epsilon = self.update_epsilon(eta, epsilon)
             x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = self.lsi(
-                p_u, u, epsilon / 100, true_Psi
+                p_u, u, epsilon, true_Psi
             )
             x_k = np.array([])
             if not len(x_tilde_lsi):
-                x_k, global_valid = self.global_search(u, epsilon / 100)
+                x_k, global_valid = self.global_search(u, epsilon)
                 # In the future implement stopping for global search
             else:
                 x_k = x_tilde_lsi
@@ -395,7 +405,7 @@ class LGCG:
                     + true_Psi
                 )
                 if not len(x_tilde_lsi):
-                    # Check if a greater value of P hsa been found
+                    # Check if a greater value of P has been found
                     Phi_k_contender = (
                         self.M * (max(0, abs(p_u(x_k)) - max(self.alpha, max_P_A)))
                         + true_Psi
@@ -429,6 +439,8 @@ class LGCG:
                     f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
                 )
                 Phi_ks.append(Phi_k)
+                times.append(time.time() - initial_time)
+                supports.append(len(u.support))
                 objective_values.append(self.j(u))
                 steps.append("recompute")
                 s += 1
@@ -467,6 +479,8 @@ class LGCG:
 
             # Update running metrics
             Phi_ks.append(Phi_k)
+            times.append(time.time() - initial_time)
+            supports.append(len(u.support))
             objective_values.append(self.j(u))
             steps.append("normal")
             logging.info(
@@ -474,7 +488,7 @@ class LGCG:
             )
             logging.info("==============================================")
             k += 1
-        return u, Phi_ks, objective_values
+        return u, Phi_ks, times, supports, objective_values
 
     def cluster_exact(self, u, radius) -> Measure:
         if not len(u.coefficients):
@@ -501,6 +515,9 @@ class LGCG:
         x, global_valid = self.global_search(u, 1000)
         P_value = np.abs(p_u(x))
         P_values = [P_value]
+        initial_time = time.time()
+        times = [time.time() - initial_time]
+        supports = [0]
         objective_values = [self.j(u)]
         while (
             len(u.coefficients) == 0
@@ -528,10 +545,10 @@ class LGCG:
             logging.info("==============================================")
             k += 1
             P_values.append(P_value)
+            times.append(time.time() - initial_time)
+            supports.append(len(u.support))
             objective_values.append(self.j(u))
-            # if k == 25:
-            #     return p_u, u, P_values, objective_values
-        return u, P_values, objective_values
+        return u, P_values, times, supports, objective_values
 
     def local_clustering(self, u: Measure, p_u: Callable) -> tuple:
         sorting_values = [0] * len(u.support)
@@ -609,6 +626,9 @@ class LGCG:
         last_value_clustering = self.j(u)
         grad_norm = 1
         grad_norms = [grad_norm]
+        initial_time = time.time()
+        times = [time.time() - initial_time]
+        supports = [0]
         objective_values = [self.j(u)]
         while grad_norm > max(tol, tol / self.m):
             # Newton step
@@ -688,9 +708,11 @@ class LGCG:
             )
             k += 1
             grad_norms.append(grad_norm)
+            times.append(time.time() - initial_time)
+            supports.append(len(u.support))
             objective_values.append(self.j(u))
 
         # Last clustering
         c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
         u = Measure(c_points, c_coefs)
-        return u, grad_norms, objective_values
+        return u, grad_norms, times, supports, objective_values
