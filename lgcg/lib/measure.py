@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Callable
+import logging
 
 
 class Measure:
@@ -32,6 +33,16 @@ class Measure:
 
     def duality_pairing(self, fct: Callable) -> float:
         # Compute the duality pairing of the measure with a function defined on Omega
+        if not len(self.support):
+            return 0
+        values = np.array([fct(x) for x in self.support])
+        if len(values.shape) > 1:
+            values = values.T
+            result = values @ self.coefficients
+            result = result.flatten()
+        else:
+            result = values @ self.coefficients
+        return result
         return sum([c * fct(x) for x, c in zip(self.support, self.coefficients)])
 
     def __add__(self, other):

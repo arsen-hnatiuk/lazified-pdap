@@ -47,9 +47,6 @@ class LGCG_finite:
         self.C = 4 * self.L * self.M**2 * self.norm_K**2  # Smoothness constant
         self.machine_precision = 1e-11
 
-    def update_epsilon(self, eta: float, epsilon: float) -> float:
-        return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
-
     def explicit_Phi(self, p: np.ndarray, u: np.ndarray, v: np.ndarray) -> float:
         # <p(u),v-u>+g(u)-g(v)
         return np.matmul(p, v - u) + self.g(u) - self.g(v)
@@ -67,7 +64,7 @@ class LGCG_finite:
         support = np.where(u != 0)[0]
         p_u = self.p(u)
         x = np.argmax(np.absolute(p_u))
-        epsilon = self.j(u) / self.M
+        epsilon = 0.5 * self.j(u) / self.M
         Psi = epsilon
         k = 1
         Phi_value = self.Phi(p_u, u, x)
@@ -76,23 +73,16 @@ class LGCG_finite:
         while Phi_value > tol:
             u_old = u.copy()
             Psi_old = Psi
-            eta = 4 / (k + 3)
-            epsilon = self.update_epsilon(eta, epsilon)
             Psi = max(min(Psi, self.M * epsilon), self.machine_precision)
             if x in support:
                 Psi = Psi / 2
-            v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
+            if abs(p_u(x)) < self.alpha:
+                v_k = np.zeros(self.K.shape[1])
+            else:
+                v_k = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
             Phi_x = self.explicit_Phi(p=p_u, u=u, v=v)
-            if Phi_x >= self.M * epsilon:
-                u = (1 - eta) * u + eta * v
-            elif (
-                self.explicit_Phi(p=p_u, u=u, v=np.zeros(self.K.shape[1]))
-                >= self.M * epsilon
-            ):
-                u = (1 - eta) * u
-            elif Phi_x > 0:
-                eta_local = Phi_x / self.C
-                u = (1 - eta_local) * u + eta_local * v
+            eta = min(1, Phi_x / self.C)
+            u = (1 - eta) * u + eta * v_k
 
             if not np.array_equal(u, u_old) or Psi_old != Psi:
                 # Low-dimensional optimization
@@ -138,9 +128,9 @@ class LGCG_finite:
         start_time = time.time()
         ssn_time = 0
         while Phi_value > tol:
-            eta = 4 / (k + 4)
-            v = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
-            u = (1 - eta) * u + eta * v
+            eta = min(1, Phi_value / self.C)
+            v_k = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
+            u = (1 - eta) * u + eta * v_k
 
             # Low-dimensional optimization
             support_extended = np.where(u != 0)[0]

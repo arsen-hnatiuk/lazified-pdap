@@ -64,9 +64,6 @@ class LGCG:
         self.machine_precision = 1e-12
         self.stop_search = 5
 
-    def update_epsilon(self, eta: float, epsilon: float) -> float:
-        return (self.M * epsilon + 0.5 * self.C * eta**2) / (self.M + self.M * eta)
-
     def explicit_Phi(self, p: Callable, u: Measure, v: Measure) -> float:
         # <p(u),v-u>+g(u)-g(v)
         return (
@@ -103,8 +100,8 @@ class LGCG:
                 False,
             )  # No points to improve around
         p_norm = lambda x: abs(p_u(x))
-        grad_P = lambda x: self.grad_P(x, u)
-        hess_P = lambda x: self.hess_P(x, u)
+        grad_P = self.grad_P(u)
+        hess_P = self.hess_P(u)
         lsi_set = u.support.copy()
         P_on_A = [p_norm(x) for x in u.support]
         max_P_A = max(P_on_A)
@@ -218,8 +215,8 @@ class LGCG:
     ) -> tuple:
         p_u = self.p(u)
         p_norm = lambda x: abs(p_u(x))
-        grad_P = lambda x: self.grad_P(x, u)
-        hess_P = lambda x: self.hess_P(x, u)
+        grad_P = self.grad_P(u)
+        hess_P = self.hess_P(u)
         grid = (
             np.array(
                 np.meshgrid(
@@ -234,7 +231,7 @@ class LGCG:
         )
         for point in grid:
             # In the future also check for cached points
-            if (
+            if epsilon and (
                 self.explicit_Phi(
                     p_u, u, Measure([point], [self.M * np.sign(p_u(point))])
                 )
@@ -271,7 +268,7 @@ class LGCG:
                         processing_array[ind] = False
                     else:
                         grid[ind] = new_point
-                        if (
+                        if epsilon and (
                             self.explicit_Phi(
                                 p_u,
                                 u,
@@ -335,7 +332,7 @@ class LGCG:
         p_u = self.p(u)
         max_P_A = 0
         true_Psi = self.Psi(u, p_u)
-        epsilon = self.j(u) / self.M
+        epsilon = 0.5 * self.j(u) / self.M
         Psi_k = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
         Phi_k = 1
         choice = "N/A"
@@ -353,10 +350,10 @@ class LGCG:
                 # Low-dimensional step
                 if self.j(u_plus_hat) < self.j(u_plus_tilde):
                     u_plus = u_plus_hat * 1
-                    choice = f"LSI, {global_valid}"
+                    choice = "Step: LSI,"
                 else:
                     u_plus = u_plus_tilde * 1
-                    choice = f"GCG, {global_valid}"
+                    choice = "Step: GCG,"
                 # Peform SSN
                 K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
                 ssn = SSN(
@@ -380,17 +377,35 @@ class LGCG:
                 true_Psi = self.Psi(u, p_u)
 
             # Find new support points
-            eta = 4 / (k + 3)
-            epsilon = self.update_epsilon(eta, epsilon)
-            x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = self.lsi(
-                p_u, u, epsilon, true_Psi
-            )
-            x_k = np.array([])
-            if not len(x_tilde_lsi):
-                x_k, global_valid = self.global_search(u, epsilon)
-                # In the future implement stopping for global search
+            if Phi_k > 1e-3:
+                # Do not perform local logic
+                x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = (
+                    np.array([]),
+                    np.array([]),
+                    np.array([]),
+                    np.array([]),
+                    False,
+                )
             else:
+                x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = self.lsi(
+                    p_u, u, epsilon, true_Psi
+                )
+            x_k = np.array([bound[0] for bound in self.Omega])
+            if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
+                v_k = Measure()
+                choice += f"x_k: {True} GCG"
+            elif len(x_tilde_lsi):
                 x_k = x_tilde_lsi
+                v_k = Measure([x_k], [self.M * np.sign(p_u(x_k))])
+                choice += f"x_k: {True} LSI"
+            else:
+                x_k, global_valid = self.global_search(u, epsilon)
+                if abs(p_u(x_k)) < self.alpha:
+                    v_k = Measure()  # The actual maximizer is v_k=0
+                else:
+                    v_k = Measure([x_k], [self.M * np.sign(p_u(x_k))])
+                choice += f"x_k: {global_valid} GCG"
+                # In the future implement stopping for global search
 
             # Build Phi_k
             if lsi_valid:
@@ -414,13 +429,10 @@ class LGCG:
                         Phi_k, Phi_k_contender
                     )  # Choose global max if LSI is valid prematurely
             else:
-                if len(x_tilde_lsi) or global_valid:
-                    Phi_k = self.M * epsilon
-                else:  # x_k is the exact global maximum of P
-                    Phi_k = (
-                        self.M * (max(0, abs(p_u(x_k)) - max(self.alpha, max_P_A)))
-                        + true_Psi
-                    )
+                Phi_k = (
+                    self.M * (max(0, abs(p_u(x_k)) - max(self.alpha, max_P_A)))
+                    + true_Psi
+                )  # Using this form of Phi guarantees that we cover the case v_k=0
 
             # Prepare and check for recompute
             constant = (
@@ -428,13 +440,13 @@ class LGCG:
                 * self.M
                 * self.L
                 * self.norm_K_star
-                * np.sqrt(Psi_k)
+                * np.sqrt(true_Psi)
                 / np.sqrt(self.gamma)
-                + 2 * Psi_k
+                + 2 * true_Psi
             )
             if constant > Phi_k and Psi_k > self.machine_precision:
                 # Recompute step and update running metrics
-                Psi_k = min(Psi_k / 2, Phi_k**2)
+                Psi_k = Psi_k / 2
                 logging.info(
                     f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
                 )
@@ -447,19 +459,16 @@ class LGCG:
                 continue
 
             # Normal step, construct new iterate
-            v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
+            eta = min(1, self.explicit_Phi(p_u, u, v_k) / self.C)
             if not (len(x_tilde_lsi) or global_valid):
-                if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
-                    u_plus_tilde = u * (1 - eta)
-                elif self.explicit_Phi(p_u, u, v) >= 0:
-                    eta_local = self.explicit_Phi(p_u, u, v) / self.C
-                    u_plus_tilde = u * (1 - eta_local) + v * eta_local
-                else:
-                    u_plus_tilde = (
-                        u * 1
-                    )  # Create a new measure with the same parameters
+                # if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
+                #     u_plus_tilde = u * (1 - eta)
+                # else:
+                #     # We have a global maximum x_k
+                u_plus_tilde = u * (1 - eta) + v_k * eta
+                epsilon = 0.5 * Phi_k / self.M
             else:
-                u_plus_tilde = u * (1 - eta) + v * eta
+                u_plus_tilde = u * (1 - eta) + v_k * eta
             if lsi_valid:
                 v_hat = self.local_measure_constructor(p_u, u, x_hat_lsi, lsi_set)
                 nu_constant = 4 * (
@@ -490,29 +499,11 @@ class LGCG:
             k += 1
         return u, Phi_ks, times, supports, objective_values
 
-    def cluster_exact(self, u, radius) -> Measure:
-        if not len(u.coefficients):
-            return u
-        new_support = []
-        new_coefs = []
-        for i, point in enumerate(u.support):
-            added = False
-            for j, other_point in enumerate(new_support):
-                if np.linalg.norm(point - other_point) < radius:
-                    new_support[j] = 0.5 * (point + other_point)
-                    new_coefs[j] = new_coefs[j] + u.coefficients[i]
-                    added = True
-                    break
-            if not added:
-                new_support.append(point)
-                new_coefs.append(u.coefficients[i])
-        return Measure(new_support, new_coefs)
-
     def solve_exact(self, tol: float) -> tuple:
         k = 1
         u = Measure()
         p_u = self.p(u)
-        x, global_valid = self.global_search(u, 1000)
+        x, global_valid = self.global_search(u, False)
         P_value = np.abs(p_u(x))
         P_values = [P_value]
         initial_time = time.time()
@@ -524,9 +515,9 @@ class LGCG:
             or P_value < self.alpha
             or P_value - self.alpha > tol
         ):
-            eta = 4 / (k + 3)
-            v = Measure(support=np.array([x]), coefficients=[1])
-            u_plus = u * (1 - eta) + v * eta
+            v_k = Measure(support=np.array([x]), coefficients=[1])
+            eta = min(1, self.explicit_Phi(p_u, u, v_k) / self.C)
+            u_plus = u * (1 - eta) + v_k * eta
             K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
             ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
             u_raw = ssn.solve(tol=self.machine_precision, u_0=u_plus.coefficients)
@@ -535,7 +526,6 @@ class LGCG:
                 support=u_plus.support[u_raw != 0].copy(),
                 coefficients=u_raw[u_raw != 0].copy(),
             )
-            # u = self.cluster_exact(u, 1e-4)
             p_u = self.p(u)
             x, global_valid = self.global_search(u, 1000)
             P_value = np.abs(p_u(x))
@@ -550,7 +540,7 @@ class LGCG:
             objective_values.append(self.j(u))
         return u, P_values, times, supports, objective_values
 
-    def local_clustering(self, u: Measure, p_u: Callable) -> tuple:
+    def local_merging(self, u: Measure, p_u: Callable) -> tuple:
         sorting_values = [0] * len(u.support)
         for ind, (x, c) in enumerate(zip(u.support, u.coefficients)):
             for x_local, c_local in zip(u.support, u.coefficients):
@@ -615,15 +605,15 @@ class LGCG:
         u_plus = Measure(points, coefs)
         return u_plus
 
-    def solve_newton(self, tol: float, clustering_frequency=5, damped=True) -> tuple:
+    def solve_newton(self, tol: float, merging_frequency=5, damped=True) -> tuple:
         u = Measure()
         p_u = self.p(u)
-        epsilon = self.j(u) / self.M
+        epsilon = 0.5 * self.j(u) / self.M
         Psi_1 = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
         Psi_k = Psi_1
         k = 1
-        steps_since_clustering = 0
-        last_value_clustering = self.j(u)
+        steps_since_merging = 0
+        last_value_merging = self.j(u)
         grad_norm = 1
         grad_norms = [grad_norm]
         initial_time = time.time()
@@ -638,23 +628,24 @@ class LGCG:
                 u_tilde_plus = u
 
             # GCG step
-            if grad_norm > 1e-8:
-                eta = 4 / (k + 3)
-                epsilon = self.update_epsilon(eta, epsilon)
-                x_k, global_valid = self.global_search(u, epsilon)
-                v = Measure([x_k], [self.M * np.sign(p_u(x_k))])
-                if not global_valid:
-                    if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
-                        u_hat_plus = u * (1 - eta)
-                    elif self.explicit_Phi(p_u, u, v) >= 0:
-                        eta_local = self.explicit_Phi(p_u, u, v) / self.C
-                        u_hat_plus = u * (1 - eta_local) + v * eta_local
-                    else:
-                        u_hat_plus = (
-                            u * 1
-                        )  # Create a new measure with the same parameters
+            global_valid = "N/A"
+            if grad_norm > 1e-3:  # Otherwise we assume that we're in Newton regime
+                if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
+                    v_k = Measure()
+                    global_valid = True
                 else:
-                    u_hat_plus = u * (1 - eta) + v * eta
+                    x_k, global_valid = self.global_search(u, epsilon)
+                    if abs(p_u(x_k)) < self.alpha:
+                        v_k = Measure()  # The actual maximizer is v_k=0
+                    else:
+                        v_k = Measure([x_k], [self.M * np.sign(p_u(x_k))])
+                eta = min(1, self.explicit_Phi(p_u, u, v_k) / self.C)
+                if not global_valid:
+                    # We have a global maximum x_k
+                    u_hat_plus = u * (1 - eta) + v_k * eta
+                    epsilon = 0.5 * self.explicit_Phi(p_u, u, v_k) / self.M
+                else:
+                    u_hat_plus = u * (1 - eta) + v_k * eta
             else:
                 u_hat_plus = u * 1
 
@@ -666,13 +657,13 @@ class LGCG:
                 choice = "newton"
                 u_plus = u_tilde_plus
                 local_Psi = Psi_1
-                steps_since_clustering = 0
+                steps_since_merging = 0
             else:
                 choice = "gcg"
                 u_plus = u_hat_plus
                 local_Psi = Psi_k
                 Psi_k = max(Psi_k / 2, self.machine_precision)
-                steps_since_clustering += 1
+                steps_since_merging += 1
 
             # Low-dimensional step
             K_support = np.transpose(np.array([self.k(x) for x in u_plus.support]))
@@ -686,25 +677,25 @@ class LGCG:
             )
             p_u = self.p(u)
             if choice == "newton":
-                last_value_clustering = self.j(u)
+                last_value_merging = self.j(u)
 
             if len(u.coefficients):
-                c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
+                c_points, c_coefs = tuple(zip(*self.local_merging(u, p_u)))
                 c_points = list(c_points)
                 c_coefs = list(c_coefs)
                 grad_j_z = self.grad_j(c_points, c_coefs)
                 grad_norm = np.linalg.norm(grad_j_z)
                 if (
-                    self.j(u) < last_value_clustering
-                    and steps_since_clustering > clustering_frequency
+                    self.j(u) < last_value_merging - 1e-3
+                    and steps_since_merging > merging_frequency
                 ):
-                    # Force clustering
-                    last_value_clustering = self.j(u)
-                    steps_since_clustering = 0
+                    # Force merging
+                    last_value_merging = self.j(u)
+                    steps_since_merging = 0
                     u = Measure(c_points, c_coefs)
 
             logging.info(
-                f"{k}: {choice}, support: {u.support}, coefs: {u.coefficients}, grad_norm:{grad_norm:.3E}, objective: {self.j(u):.3E}"
+                f"{k}: {choice}, lazy: {global_valid} support: {u.support}, grad_norm:{grad_norm:.3E}, objective: {self.j(u):.3E}"
             )
             k += 1
             grad_norms.append(grad_norm)
@@ -712,7 +703,7 @@ class LGCG:
             supports.append(len(u.support))
             objective_values.append(self.j(u))
 
-        # Last clustering
-        c_points, c_coefs = tuple(zip(*self.local_clustering(u, p_u)))
+        # Last merging
+        c_points, c_coefs = tuple(zip(*self.local_merging(u, p_u)))
         u = Measure(c_points, c_coefs)
         return u, grad_norms, times, supports, objective_values
