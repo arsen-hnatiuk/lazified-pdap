@@ -377,7 +377,7 @@ class LGCG:
                 true_Psi = self.Psi(u, p_u)
 
             # Find new support points
-            if Phi_k > 1e-3:
+            if Phi_k > 1e-2:
                 # Do not perform local logic
                 x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, lsi_valid = (
                     np.array([]),
@@ -461,10 +461,6 @@ class LGCG:
             # Normal step, construct new iterate
             eta = min(1, self.explicit_Phi(p_u, u, v_k) / self.C)
             if not (len(x_tilde_lsi) or global_valid):
-                # if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
-                #     u_plus_tilde = u * (1 - eta)
-                # else:
-                #     # We have a global maximum x_k
                 u_plus_tilde = u * (1 - eta) + v_k * eta
                 epsilon = 0.5 * Phi_k / self.M
             else:
@@ -493,7 +489,7 @@ class LGCG:
             objective_values.append(self.j(u))
             steps.append("normal")
             logging.info(
-                f"{k}: {choice}, Phi_k: {Phi_k}, epsilon: {epsilon} support: {u.support}"
+                f"{k}: {choice}, Phi_k: {Phi_k}, epsilon: {epsilon}, support: {u.support}, coefs: {u.coefficients}"
             )
             logging.info("==============================================")
             k += 1
@@ -615,12 +611,41 @@ class LGCG:
         steps_since_merging = 0
         last_value_merging = self.j(u)
         grad_norm = 1
+        merged = False
         grad_norms = [grad_norm]
         initial_time = time.time()
         times = [time.time() - initial_time]
         supports = [0]
         objective_values = [self.j(u)]
-        while grad_norm > max(tol, tol / self.m):
+        while True:
+            # Local merging
+            if len(u.coefficients):
+                c_points, c_coefs = tuple(zip(*self.local_merging(u, p_u)))
+                c_points = list(c_points)
+                c_coefs = list(c_coefs)
+                grad_j_z = self.grad_j(c_points, c_coefs)
+                grad_norm = np.linalg.norm(grad_j_z)
+                if (
+                    self.j(u) < last_value_merging - 1e-3
+                    and steps_since_merging > merging_frequency
+                ) or grad_norm < tol:
+                    # Force merging
+                    last_value_merging = self.j(u)
+                    steps_since_merging = 0
+                    u = Measure(c_points, c_coefs)
+                    merged = True
+                else:
+                    merged = False
+
+            # Stoppong criterion
+            if grad_norm < tol:
+                if choice != "newton":
+                    grad_norms.append(grad_norm)
+                    times.append(time.time() - initial_time)
+                    supports.append(len(u.support))
+                    objective_values.append(self.j(u))
+                break
+
             # Newton step
             if len(u.coefficients):
                 u_tilde_plus = self.compute_newton_step(c_points, c_coefs, damped)
@@ -676,26 +701,11 @@ class LGCG:
                 coefficients=u_raw[u_raw != 0].copy(),
             )
             p_u = self.p(u)
-            if choice == "newton":
-                last_value_merging = self.j(u)
-
-            if len(u.coefficients):
-                c_points, c_coefs = tuple(zip(*self.local_merging(u, p_u)))
-                c_points = list(c_points)
-                c_coefs = list(c_coefs)
-                grad_j_z = self.grad_j(c_points, c_coefs)
-                grad_norm = np.linalg.norm(grad_j_z)
-                if (
-                    self.j(u) < last_value_merging - 1e-3
-                    and steps_since_merging > merging_frequency
-                ):
-                    # Force merging
-                    last_value_merging = self.j(u)
-                    steps_since_merging = 0
-                    u = Measure(c_points, c_coefs)
+            # if choice == "newton":
+            #     last_value_merging = self.j(u)
 
             logging.info(
-                f"{k}: {choice}, lazy: {global_valid} support: {u.support}, grad_norm:{grad_norm:.3E}, objective: {self.j(u):.3E}"
+                f"{k}: {choice}, lazy: {global_valid}, merged {merged}, support: {u.support}, grad_norm:{grad_norm:.3E}, objective: {self.j(u):.3E}"
             )
             k += 1
             grad_norms.append(grad_norm)
