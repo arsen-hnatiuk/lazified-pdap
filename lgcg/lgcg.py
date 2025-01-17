@@ -541,43 +541,32 @@ class LGCG:
             objective_values.append(self.j(u))
         return u, P_values, times, supports, objective_values
 
-    def local_merging(self, u: Measure, p_u: Callable) -> tuple:
-        sorting_values = [0] * len(u.support)
-        for ind, (x, c) in enumerate(zip(u.support, u.coefficients)):
-            for x_local, c_local in zip(u.support, u.coefficients):
-                if np.linalg.norm(x - x_local) < 2 * self.R:
-                    sorting_values[ind] += c_local * p_u(x_local)
+    def local_merging(self, u: Measure) -> tuple:
         tuples = [(x, c) for x, c in zip(u.support, u.coefficients)]
-        tuples_sorted = [
-            x
-            for _, x in sorted(
-                zip(sorting_values, tuples), key=lambda t: t[0], reverse=True
-            )
-        ]
-        clustered_tuples = []
-        already_clustered = []
-        for x, c in tuples_sorted:
-            if not len(already_clustered) or not np.any(
-                np.all(np.array(already_clustered) == x, axis=1)
-            ):
-                coefficient = 0
-                for x_local, c_local in tuples_sorted:
-                    if (
-                        not len(already_clustered)
-                        or not np.any(
-                            np.all(np.array(already_clustered) == x_local, axis=1)
-                        )
-                    ) and np.linalg.norm(x - x_local) < 2 * self.R:
-                        coefficient += c_local
-                        already_clustered.append(x_local)
-                clustered_tuples.append((x, coefficient))
-        points, coefs = tuple(zip(*clustered_tuples))
-        points = list(points)
-        coefs = list(coefs)
-        return points, coefs
+        new_tuples = []
+        already_merged = []
+        for ind, (x, c) in enumerate(tuples):
+            if ind not in already_merged:
+                c_new = c
+                already_merged.append(ind)
+                for ind_local, (x_local, c_local) in enumerate(tuples):
+                    if ind_local not in already_merged:
+                        if np.linalg.norm(x - x_local) < 2 * self.R:
+                            c_new += c_local
+                            already_merged.append(ind_local)
+                new_tuples.append((x, c_new))
+        new_points, new_coefs = tuple(zip(*new_tuples))
+        new_points = list(new_points)
+        new_coefs = list(new_coefs)
+        return new_points, new_coefs
 
     def newton_step(
-        self, points: np.ndarray, coefs: np.ndarray, beta: float, damped: bool
+        self,
+        points: np.ndarray,
+        coefs: np.ndarray,
+        beta: float,
+        damped: bool,
+        damping_root: float,
     ) -> tuple:
         points_init = points.copy()
         coefs_init = coefs.copy()
@@ -602,7 +591,7 @@ class LGCG:
                 )
                 / (16 * self.L_H * self.bar_m**3 * np.linalg.norm(grad_j_z)),
             )
-            nu = nu**0.2
+            nu = nu ** (1 / damping_root)
         else:
             nu = 1
         try:
@@ -679,165 +668,60 @@ class LGCG:
                 2 * self.bar_m
             )
         tol_ineq = 2 * self.M * epsilon_plus >= tol
-        return ineq73, ineq75, ineq78, tol_ineq
-
-    def solve_newton_old(self, tol: float, merging_frequency=5, damped=True) -> tuple:
-        u = Measure()
-        p_u = self.p(u)
-        epsilon = 0.5 * self.j(u) / self.M
-        Psi_1 = self.gamma * self.sigma / (5 * self.norm_K_star**2 * self.L**2)
-        Psi_k = Psi_1
-        k = 1
-        steps_since_merging = 0
-        last_value_merging = self.j(u)
-        grad_norm = 1
-        merged = False
-        grad_norms = [grad_norm]
-        initial_time = time.time()
-        times = [time.time() - initial_time]
-        supports = [0]
-        objective_values = [self.j(u)]
-        while True:
-            # Local merging
-            if len(u.coefficients):
-                c_points, c_coefs = tuple(zip(*self.local_merging(u, p_u)))
-                c_points = list(c_points)
-                c_coefs = list(c_coefs)
-                grad_j_z = self.grad_j(c_points, c_coefs)
-                grad_norm = np.linalg.norm(grad_j_z)
-                if (
-                    self.j(u) < last_value_merging - 1e-3
-                    and steps_since_merging > merging_frequency
-                ) or grad_norm < tol:
-                    # Force merging
-                    last_value_merging = self.j(u)
-                    steps_since_merging = 0
-                    u = Measure(c_points, c_coefs)
-                    merged = True
-                else:
-                    merged = False
-
-            # Stoppong criterion
-            if grad_norm < tol:
-                if choice != "newton":
-                    grad_norms.append(grad_norm)
-                    times.append(time.time() - initial_time)
-                    supports.append(len(u.support))
-                    objective_values.append(self.j(u))
-                break
-
-            # Newton step
-            if len(u.coefficients):
-                u_tilde_plus = self.compute_newton_step(c_points, c_coefs, damped)
-            else:
-                u_tilde_plus = u
-
-            # GCG step
-            global_valid = "N/A"
-            if grad_norm > 1e-3:  # Otherwise we assume that we're in Newton regime
-                if self.explicit_Phi(p_u, u, Measure()) >= self.M * epsilon:
-                    v_k = Measure()
-                    global_valid = True
-                else:
-                    x_k, global_valid = self.global_search(u, epsilon)
-                    if abs(p_u(x_k)) < self.alpha:
-                        v_k = Measure()  # The actual maximizer is v_k=0
-                    else:
-                        v_k = Measure([x_k], [self.M * np.sign(p_u(x_k))])
-                eta = min(1, self.explicit_Phi(p_u, u, v_k) / self.C)
-                if not global_valid:
-                    # We have a global maximum x_k
-                    u_hat_plus = u * (1 - eta) + v_k * eta
-                    epsilon = 0.5 * self.explicit_Phi(p_u, u, v_k) / self.M
-                else:
-                    u_hat_plus = u * (1 - eta) + v_k * eta
-            else:
-                u_hat_plus = u * 1
-
-            if (
-                self.j(u_hat_plus) > self.j(u_tilde_plus)
-                or abs(self.j(u_hat_plus) - self.j(u_tilde_plus))
-                < self.machine_precision
-            ):
-                choice = "newton"
-                u_plus = u_tilde_plus
-                local_Psi = Psi_1
-                steps_since_merging = 0
-            else:
-                choice = "gcg"
-                u_plus = u_hat_plus
-                local_Psi = Psi_k
-                Psi_k = max(Psi_k / 2, self.machine_precision)
-                steps_since_merging += 1
-
-            # Low-dimensional step
-            K_support = np.transpose(np.array([self.kappa(x) for x in u_plus.support]))
-            ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
-            u_raw = ssn.solve(tol=local_Psi, u_0=u_plus.coefficients)
-            u_raw[np.abs(u_raw) < self.machine_precision] = 0
-            # Reconstruct u
-            u = Measure(
-                support=u_plus.support[u_raw != 0].copy(),
-                coefficients=u_raw[u_raw != 0].copy(),
-            )
-            p_u = self.p(u)
-            # if choice == "newton":
-            #     last_value_merging = self.j(u)
-
-            logging.info(
-                f"{k}: {choice}, lazy: {global_valid}, merged {merged}, support: {u.support}, grad_norm:{grad_norm:.3E}, objective: {self.j(u):.3E}"
-            )
-            k += 1
-            grad_norms.append(grad_norm)
-            times.append(time.time() - initial_time)
-            supports.append(len(u.support))
-            objective_values.append(self.j(u))
-
-        # Last merging
-        c_points, c_coefs = tuple(zip(*self.local_merging(u, p_u)))
-        u = Measure(c_points, c_coefs)
-        return u, grad_norms, times, supports, objective_values
+        M_ineq = np.linalg.norm(coefs_plus, ord=1) <= self.M
+        return ineq73, ineq75, ineq78, tol_ineq, M_ineq
 
     def solve_newton(
-        self, tol: float, lgcg_frequency: int = 5, beta: float = 1e-5, damped=True
+        self,
+        tol: float,
+        lgcg_frequency: int = 5,
+        beta: float = 1e-5,
+        damped=True,
+        damping_root: float = 1,
     ) -> tuple:
-        u = Measure()
-        p_u = self.p(u)
-        epsilon = 0.5 * self.j(u) / self.M
+        u_minus = Measure()
+        epsilon = 0.5 * self.j(u_minus) / self.M
         Psi = self.gamma * self.sigma / (16 * self.norm_K_star**2 * self.L**2)
         k = 1
         initial_time = time.time()
         times = [time.time() - initial_time]
         supports = [0]
-        objective_values = [self.j(u)]
-        while True:
+        inner_loop = [0]
+        objective_values = [self.j(u_minus)]
+        inner_lazy = 0
+        inner_total = 0
+        outer_lazy = 0
+        outer_total = 0
+        while 2 * self.M * epsilon > tol:
             # LocalRoutine
-            if len(u.coefficients):
+            if len(u_minus.coefficients):
                 s = 1
-                points, coefs = self.local_merging(u, p_u)
+                points, coefs = self.local_merging(u_minus)
                 u_ks = Measure(points, coefs)
                 p_u_ks = self.p(u_ks)
-                epsilon_ks = epsilon + 0.5 * (self.j(u_ks) - self.j(u)) / self.M
+                epsilon_ks = epsilon + 0.5 * (self.j(u_ks) - self.j(u_minus)) / self.M
                 points_plus, coefs_plus = self.newton_step(
-                    points.copy(), coefs.copy(), beta, damped
+                    points.copy(), coefs.copy(), beta, damped, damping_root
                 )
                 u_ks_plus = Measure(points_plus, coefs_plus)
                 u_hat_plus, epsilon_ks_plus, global_valid = self.lgcg_step(
                     p_u_ks, u_ks, epsilon_ks
                 )
+                inner_lazy += int(global_valid)
+                inner_total += 1
 
                 # Regularity conditions
-                ineq73, ineq75, ineq78, tol_ineq = self.get_regularity_inequalities(
-                    points, coefs, points_plus, coefs_plus, epsilon_ks_plus, tol
+                ineq73, ineq75, ineq78, tol_ineq, M_ineq = (
+                    self.get_regularity_inequalities(
+                        points, coefs, points_plus, coefs_plus, epsilon_ks_plus, tol
+                    )
                 )
 
-                # evs = np.linalg.eig(self.hess_j(points, coefs)).eigenvalues
-                # inv_evs = [1 / ev for ev in evs]
-                # logging.info(f"min: {min(inv_evs)}, max: {max(inv_evs)}")
-                logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}")
-                while ineq73 and ineq75 and ineq78 and tol_ineq:
+                logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}, {M_ineq}")
+                while ineq73 and ineq75 and ineq78 and tol_ineq and M_ineq:
                     times.append(time.time() - initial_time)
                     supports.append(len(u_ks.support))
+                    inner_loop.append(1)
                     objective_values.append(self.j(u_ks))
                     logging.info(
                         f"{k}, {s}: lazy: {global_valid}, support: {u_ks.support}, coefs: {u_ks.coefficients}, epsilon: {epsilon_ks_plus}, objective: {self.j(u_ks):.3E}"
@@ -848,7 +732,7 @@ class LGCG:
                     u_ks = u_ks_plus * 1
                     p_u_ks = self.p(u_ks)
                     points_plus, coefs_plus = self.newton_step(
-                        points.copy(), coefs.copy(), beta, damped
+                        points.copy(), coefs.copy(), beta, damped, damping_root
                     )
                     u_ks_plus = Measure(points_plus, coefs_plus)
                     if s % lgcg_frequency == 0:
@@ -856,58 +740,53 @@ class LGCG:
                         u_hat_plus, epsilon_ks_plus, global_valid = self.lgcg_step(
                             p_u_ks, u_ks, epsilon_ks
                         )
-                    ineq73, ineq75, ineq78, tol_ineq = self.get_regularity_inequalities(
-                        points, coefs, points_plus, coefs_plus, epsilon_ks_plus, tol
+                        inner_lazy += int(global_valid)
+                        inner_total += 1
+                    else:
+                        global_valid = "N/A"
+                    ineq73, ineq75, ineq78, tol_ineq, M_ineq = (
+                        self.get_regularity_inequalities(
+                            points, coefs, points_plus, coefs_plus, epsilon_ks_plus, tol
+                        )
                     )
-                    # evs = np.linalg.eig(self.hess_j(points, coefs)).eigenvalues
-                    # inv_evs = [1 / ev for ev in evs]
-                    # logging.info(f"min: {min(inv_evs)}, max: {max(inv_evs)}")
-                    logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}")
+                    logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}, {M_ineq}")
 
                 # Choose best iterate so far
-                all_iterates = [u, u_ks, u_ks_plus, u_hat_plus]
-                objective_values = [self.j(iterate) for iterate in all_iterates]
-                choice_index = np.argmin(objective_values)
-                u_prime = all_iterates[choice_index] * 1
-                if choice_index:
+                all_iterates = [u_minus, u_ks, u_ks_plus, u_hat_plus]
+                iterate_values = [self.j(iterate) for iterate in all_iterates]
+                choice_index = np.argmin(iterate_values)
+                u_plus = all_iterates[choice_index] * 1
+                if not tol_ineq:
                     epsilon = epsilon_ks_plus
-                if not choice_index:
-                    logging.info(objective_values)
             else:
                 choice_index = 0
-                u_prime = u * 1
-            p_u_prime = self.p(u_prime)
-
-            if not choice_index:
-                # u'=u, no improvement yet
-                u_plus, epsilon, global_valid = self.lgcg_step(
-                    p_u_prime, u_prime, epsilon
-                )
-            else:
-                # LGCG has already been computed
-                u_plus = u_prime * 1
-
-            # Termination criterium
-            if 2 * self.M * epsilon < tol:
-                u = u_prime * 1
-                break
+                u_plus = u_minus * 1
 
             u = self.low_dimensional_step(u_plus, Psi)
-            Psi = max(Psi / 2, self.machine_precision)
             p_u = self.p(u)
+            Psi = max(Psi / 2, self.machine_precision)
+
+            u_minus, epsilon, global_valid = self.lgcg_step(p_u, u, epsilon)
+            outer_lazy += int(global_valid)
+            outer_total += 1
 
             times.append(time.time() - initial_time)
             supports.append(len(u.support))
+            inner_loop.append(0)
             objective_values.append(self.j(u))
             logging.info(
                 f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {u.support}, epsilon: {epsilon}, objective: {self.j(u):.3E}"
             )
             k += 1
 
-        times.append(time.time() - initial_time)
-        supports.append(len(u.support))
-        objective_values.append(self.j(u))
-        logging.info(
-            f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {u.support}, epsilon: {epsilon}, objective: {self.j(u):.3E}"
+        return (
+            u,
+            times,
+            supports,
+            inner_loop,
+            inner_lazy,
+            inner_total,
+            outer_lazy,
+            outer_total,
+            objective_values,
         )
-        return u, times, supports, objective_values
