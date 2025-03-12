@@ -9,7 +9,7 @@ logging.basicConfig(
 )
 
 
-class LGCG_finite:
+class LazifiedPDAPFinite:
     # An implementation of the LGCG algorithm for finite Omega
 
     def __init__(
@@ -76,11 +76,11 @@ class LGCG_finite:
             Psi = max(min(Psi, self.M * epsilon), self.machine_precision)
             if x in support:
                 Psi = Psi / 2
-            if abs(p_u(x)) < self.alpha:
+            if abs(p_u[x]) < self.alpha:
                 v_k = np.zeros(self.K.shape[1])
             else:
                 v_k = self.M * np.sign(p_u[x]) * np.eye(1, self.K.shape[1], x)[0]
-            Phi_x = self.explicit_Phi(p=p_u, u=u, v=v)
+            Phi_x = self.explicit_Phi(p=p_u, u=u, v=v_k)
             eta = min(1, Phi_x / self.C)
             u = (1 - eta) * u + eta * v_k
 

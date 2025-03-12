@@ -1,8 +1,8 @@
 # lazified-generalized-conditional-gradient
-Implementation of the Lazified GCG algorithm
+Implementation of the Lazified PDAP algorithm, as well as 
 
 To create a conda environment with the required dependencies, run the command
 ```
-conda create --name conda_env_lgcg --file requirements.txt
-conda activate conda_env_lgcg
+conda create --name lpdap_env --file requirements.txt
+conda activate lpdap_env
 ```
