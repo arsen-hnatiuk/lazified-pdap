@@ -70,6 +70,7 @@ class LazifiedPDAP:
         )
         self.grad_j = grad_j
         self.hess_j = hess_j
+        self.Psi_0 = 1e-3
         self.machine_precision = 1e-12
         self.stop_search = 5
         self.batching_constant = 2e8
@@ -216,7 +217,7 @@ class LazifiedPDAP:
         x_check = lsi_set[check_ind]
         return x_hat, x_check, lsi_set
 
-    def get_grid(self):
+    def get_grid(self, u: Measure) -> np.ndarray:
         if self.projection == "sphere":
             dimensions = self.Omega.shape[0]
             sample_raw = np.random.multivariate_normal(
@@ -226,6 +227,8 @@ class LazifiedPDAP:
             )
             sample_norms = np.linalg.norm(sample_raw, axis=1)
             sample = np.divide(sample_raw, sample_norms.reshape(-1, 1))
+            if len(u.coefficients):
+                sample = np.vstack([sample, u.support])
             return sample
         else:
             grid = (
@@ -242,6 +245,8 @@ class LazifiedPDAP:
                 .reshape(len(self.Omega), -1)
                 .T
             )
+            if len(u.coefficients):
+                grid = np.vstack([grid, u.support])
             return grid
 
     def global_search(self, u: Measure, epsilon: float) -> tuple:
@@ -250,7 +255,7 @@ class LazifiedPDAP:
         p_norm = lambda x: np.abs(p_u(x))
         grad_P = self.grad_P(u)
         hess_P = self.hess_P(u)
-        grid = self.get_grid()
+        grid = self.get_grid(u)
         grid_vals = p_norm(grid)
         max_ind = np.argmax(grid_vals)
         best_val = grid_vals[max_ind]
@@ -388,10 +393,7 @@ class LazifiedPDAP:
             max_P_A = 0
         Phi_A = np.max(self.M * (max_P_A - self.alpha), 0) + q_u
         epsilon = 0.5 * self.j(u) / self.M
-        Psi_k = min(
-            self.gamma * self.sigma**2 / (16 * self.norm_K_star**2 * self.L**2),
-            Psi_0,
-        )
+        Psi_k = min(Psi_0, self.Psi_0)
         Phi_k = 1e8
         choice = "N/A"
         global_valid = False
@@ -451,7 +453,7 @@ class LazifiedPDAP:
                 # Recompute step and update running metrics
                 Psi_k = max(Psi_k / 2, self.machine_precision)
                 logging.info(
-                    f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
+                    f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
                 )
                 steps.append("recompute")
                 s += 1
@@ -511,10 +513,7 @@ class LazifiedPDAP:
         else:
             max_P_A = 0
         Phi_A = np.max(self.M * (max_P_A - self.alpha), 0) + q_u
-        Psi_k = min(
-            self.gamma * self.sigma**2 / (16 * self.norm_K_star**2 * self.L**2),
-            Psi_0,
-        )
+        Psi_k = min(Psi_0, self.Psi_0)
         Phi_k = 1e8
         choice = "N/A"
         k = 1
@@ -772,9 +771,7 @@ class LazifiedPDAP:
     ) -> tuple:
         u_minus = u_0 * 1
         epsilon = 0.5 * self.j(u_minus) / self.M
-        Psi = min(
-            Psi_0, self.gamma * self.sigma / (16 * self.norm_K_star**2 * self.L**2)
-        )
+        Psi_k = min(Psi_0, self.Psi_0)
         k = 1
         initial_time = time.time()
         times = [time.time() - initial_time]
@@ -857,10 +854,10 @@ class LazifiedPDAP:
                 choice_index = 0
                 u_plus = u_minus * 1
 
-            u = self.low_dimensional_step(u_plus, Psi)
+            u = self.low_dimensional_step(u_plus, Psi_k)
             p_u = self.p(u)
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
-            Psi = max(Psi / 2, self.machine_precision)
+            Psi_k = max(Psi_k / 2, self.machine_precision)
 
             u_minus, epsilon, global_valid = self.lgcg_step(p_u, u, epsilon, q_u)
             outer_lazy += int(global_valid)
