@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Callable
+from typing import Callable, Union
 import logging
 
 
@@ -31,11 +31,15 @@ class Measure:
                 self.support = np.vstack([self.support, point])
                 self.coefficients = np.append(self.coefficients, 0)
 
-    def duality_pairing(self, fct: Callable) -> float:
+    def duality_pairing(self, fct_in: Union[np.ndarray, Callable]) -> float:
         # Compute the duality pairing of the measure with a function defined on Omega
         if not len(self.support):
             return 0
-        values = fct(self.support.copy())  # np.array([fct(x) for x in self.support])
+        if type(fct_in) == np.ndarray:
+            fct = lambda x: fct_in[x.flatten()]  # turn matrix into Callable
+        else:
+            fct = fct_in
+        values = fct(self.support.copy())
         if len(values.shape) > 1:
             values = values.T
             result = values @ self.coefficients
