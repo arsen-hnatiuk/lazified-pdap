@@ -70,7 +70,7 @@ class LazifiedPDAP:
         )
         self.grad_j = grad_j
         self.hess_j = hess_j
-        self.Psi_0 = 1e-3
+        self.Psi_0 = 1e-12
         self.machine_precision = 1e-12
         self.stop_search = 5
         self.batching_constant = 2e8
@@ -368,7 +368,21 @@ class LazifiedPDAP:
                 new_coefficients.append(c)
         return Measure(new_support, new_coefficients)
 
-    def low_dimensional_step(self, u_plus: Measure, Psi: float) -> Measure:
+    # def local_measure_constructor(
+    #     self, p_u: Callable, u: Measure, x_hat: np.ndarray, lsi_set: list
+    # ) -> Measure:
+    #     new_support = [x_hat]
+    #     new_coefficients = [0]
+    #     support_distances = np.linalg.norm(u.support - x_hat, axis=1)
+    #     for s_dist, x, c in zip(support_distances, u.support, u.coefficients):
+    #         if s_dist < 2 * self.R:
+    #             new_coefficients[0] += c
+    #         else:
+    #             new_support.append(x)
+    #             new_coefficients.append(c)
+    #     return Measure(new_support, new_coefficients)
+
+    def finite_dimensional_step(self, u_plus: Measure, Psi: float) -> Measure:
         if not len(u_plus.coefficients):
             return u_plus
         K_support = self.kappa(u_plus.support).T
@@ -381,6 +395,23 @@ class LazifiedPDAP:
             coefficients=u_raw[u_raw != 0].copy(),
         )
         return u
+
+    def drop_step(self, u: Measure) -> tuple:
+        p_u = self.p(u)
+        p_vals = np.abs(p_u(u.support))
+        drop_support = []
+        drop_coefficients = []
+        for point, coef, val in zip(u.support, u.coefficients, p_vals):
+            if val >= self.alpha - 0.5 * self.sigma:
+                drop_support.append(point)
+                drop_coefficients.append(coef)
+        if len(drop_support) != len(u.support):
+            drop_u = Measure(drop_support, drop_coefficients)
+            drop_j = self.j(drop_u)
+            true_j = self.j(u)
+            if drop_j < true_j:
+                return drop_u, True
+        return u, False
 
     def lpdap(self, tol: float, u_0: Measure = Measure(), Psi_0: float = 1) -> tuple:
         u = u_0 * 1
@@ -396,6 +427,8 @@ class LazifiedPDAP:
         Psi_k = min(Psi_0, self.Psi_0)
         Phi_k = 1e8
         choice = "N/A"
+        dropped = False
+        dropped_tot = 0
         global_valid = False
         k = 1
         s = 1
@@ -408,7 +441,9 @@ class LazifiedPDAP:
         while Phi_k > tol:
             if len(u_plus.coefficients):
                 # Low-dimensional step
-                u = self.low_dimensional_step(u_plus, Psi_k)
+                u_plus_plus = self.finite_dimensional_step(u_plus, Psi_k)
+                u, dropped = self.drop_step(u_plus_plus)
+                dropped_tot += dropped
                 p_u = self.p(u)
                 q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
                 max_P_A = np.max(np.abs(p_u(u.support)))
@@ -453,7 +488,7 @@ class LazifiedPDAP:
                 # Recompute step and update running metrics
                 Psi_k = max(Psi_k / 2, self.machine_precision)
                 logging.info(
-                    f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
+                    f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}, dropped:{dropped}"
                 )
                 steps.append("recompute")
                 s += 1
@@ -497,11 +532,11 @@ class LazifiedPDAP:
             # Update running metrics
             steps.append("normal")
             logging.info(
-                f"{k}: {choice}, Phi_k: {Phi_k:.3E}, epsilon: {epsilon:.3E}, support: {u.support}, coefs: {u.coefficients}"
+                f"{k}: {choice}, Phi_k: {Phi_k:.3E}, epsilon: {epsilon:.3E}, support: {u.support}, coefs: {u.coefficients}, dropped:{dropped}"
             )
             logging.info("==============================================")
             k += 1
-        return u, Phi_ks, times, supports, objective_values
+        return u, Phi_ks, times, supports, objective_values, dropped_tot
 
     def lpdap_simple(self, tol: float, u_0: Measure, Psi_0: float = 1) -> tuple:
         u = u_0 * 1
@@ -516,6 +551,8 @@ class LazifiedPDAP:
         Psi_k = min(Psi_0, self.Psi_0)
         Phi_k = 1e8
         choice = "N/A"
+        dropped = False
+        dropped_tot = 0
         k = 1
         s = 1
         Phi_ks = []
@@ -527,7 +564,9 @@ class LazifiedPDAP:
         while Phi_k > tol:
             if len(u_plus.coefficients):
                 # Low-dimensional step
-                u = self.low_dimensional_step(u_plus, Psi_k)
+                u_plus_plus = self.finite_dimensional_step(u_plus, Psi_k)
+                u, dropped = self.drop_step(u_plus_plus)
+                dropped_tot += dropped
                 p_u = self.p(u)
                 q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
                 max_P_A = np.max(np.abs(p_u(u.support)))
@@ -558,7 +597,7 @@ class LazifiedPDAP:
                 # Recompute step and update running metrics
                 Psi_k = max(Psi_k / 2, self.machine_precision)
                 logging.info(
-                    f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}"
+                    f"Recompute {s}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, constant:{constant:.3E}, dropped:{dropped}"
                 )
                 steps.append("recompute")
                 s += 1
@@ -596,11 +635,11 @@ class LazifiedPDAP:
             # Update running metrics
             steps.append("normal")
             logging.info(
-                f"{k}: {choice}, Phi_k: {Phi_k:.3E}, support: {u.support}, coefs: {u.coefficients}"
+                f"{k}: {choice}, Phi_k: {Phi_k:.3E}, support: {u.support}, coefs: {u.coefficients}, dropped:{dropped}"
             )
             logging.info("==============================================")
             k += 1
-        return u, Phi_ks, times, supports, objective_values
+        return u, Phi_ks, times, supports, objective_values, dropped_tot
 
     def pdap(self, tol: float, u_0: Measure = Measure()) -> tuple:
         k = 1
@@ -619,7 +658,7 @@ class LazifiedPDAP:
             v_k = Measure(support=np.array([x]), coefficients=[1])
             eta = min(1, Phi_k / self.C)
             u_plus = u * (1 - eta) + v_k * eta
-            u = self.low_dimensional_step(u_plus, self.machine_precision)
+            u = self.finite_dimensional_step(u_plus, self.machine_precision)
             p_u = self.p(u)
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
 
@@ -773,6 +812,8 @@ class LazifiedPDAP:
         epsilon = 0.5 * self.j(u_minus) / self.M
         Psi_k = min(Psi_0, self.Psi_0)
         k = 1
+        dropped = False
+        dropped_tot = 0
         initial_time = time.time()
         times = [time.time() - initial_time]
         supports = [0]
@@ -854,7 +895,12 @@ class LazifiedPDAP:
                 choice_index = 0
                 u_plus = u_minus * 1
 
-            u = self.low_dimensional_step(u_plus, Psi_k)
+            u_plus_plus = self.finite_dimensional_step(u_plus, Psi_k)
+            if len(u_plus_plus.coefficients):
+                u, dropped = self.drop_step(u_plus_plus)
+                dropped_tot += dropped
+            else:
+                u = u_plus_plus * 1
             p_u = self.p(u)
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
             Psi_k = max(Psi_k / 2, self.machine_precision)
@@ -868,7 +914,7 @@ class LazifiedPDAP:
             inner_loop.append(0)
             objective_values.append(self.j(u))
             logging.info(
-                f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {u.support}, epsilon: {epsilon}, objective: {self.j(u):.3E}"
+                f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {u.support}, epsilon: {epsilon}, objective: {self.j(u):.3E}, dropped:{dropped}"
             )
             k += 1
 
@@ -882,4 +928,5 @@ class LazifiedPDAP:
             outer_lazy,
             outer_total,
             objective_values,
+            dropped_tot,
         )

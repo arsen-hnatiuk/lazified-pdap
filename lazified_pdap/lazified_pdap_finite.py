@@ -16,7 +16,7 @@ class LazifiedPDAPFinite:
     def __init__(
         self,
         target: np.ndarray,
-        K: np.ndarray,
+        K_transpose: np.ndarray,
         alpha: float = 1,
     ) -> None:
         K = np.append(
@@ -24,12 +24,9 @@ class LazifiedPDAPFinite:
             np.ones((K.shape[0], 1)),
             axis=1,
         )  # Adding a constant term
-        self.K_norms = np.linalg.norm(K, axis=0)
+        self.K_norms = np.linalg.norm(K_transpose, axis=1)
         self.K_norms[self.K_norms == 0] = 1  # Avoid division by zero
-        self.K_transpose = np.array(
-            [row / norm for row, norm in zip(K.T, self.K_norms)]
-        )
-        self.K = np.transpose(self.K_transpose)
+        self.K_transpose = np.divide(K_transpose, self.K_norms.reshape(-1, 1))
         self.target_norm = np.linalg.norm(target)
         self.target = target / self.target_norm
         self.f = (
@@ -40,11 +37,9 @@ class LazifiedPDAPFinite:
         self.alpha = alpha
         self.g = lambda u: alpha * np.linalg.norm(u.coefficients, ord=1)
         self.L = 1
-        self.norm_K = np.max(
-            [np.linalg.norm(row) for row in np.transpose(self.K)]
-        )  # the 2,inf norm of K* = the 1,2 norm of K
+        self.norm_K = np.max(np.linalg.norm(self.K_transpose, axis=1))
         self.u_0 = Measure(
-            support=[[self.K.shape[1] - 1]], coefficients=[1]
+            support=[[self.K_transpose.shape[0] - 1]], coefficients=[1]
         )  # Only the constant term
         self.j = lambda u: self.f(u) + self.g(u)
         self.M = self.j(self.u_0) / self.alpha  # Bound on the norm of iterates
@@ -63,7 +58,7 @@ class LazifiedPDAPFinite:
             - u.duality_pairing(p_u)
         )
 
-    def low_dimensional_step(self, u_plus: Measure, Psi: float) -> Measure:
+    def finite_dimensional_step(self, u_plus: Measure, Psi: float) -> Measure:
         if not len(u_plus.coefficients):
             return u_plus
         K_support = self.K_transpose[u_plus.support.flatten()].T
@@ -105,7 +100,7 @@ class LazifiedPDAPFinite:
             if not np.array_equal(u, u_old) or Psi_old != Psi:
                 # Low-dimensional optimization
                 ssn_start = time.time()
-                u = self.low_dimensional_step(u, Psi)
+                u = self.finite_dimensional_step(u, Psi)
                 ssn_time += time.time() - ssn_start
 
                 if not np.array_equal(
@@ -145,7 +140,7 @@ class LazifiedPDAPFinite:
             v_k = Measure(support=[[x]], coefficients=[self.M * np.sign(p_u[x])])
             u_plus = u * (1 - eta) + v_k * eta
             ssn_start = time.time()
-            u = self.low_dimensional_step(u_plus, self.machine_precision)
+            u = self.finite_dimensional_step(u_plus, self.machine_precision)
             ssn_time += time.time() - ssn_start
             residuum_u = self.residuum(u)
             p_u = -self.K_transpose @ residuum_u
