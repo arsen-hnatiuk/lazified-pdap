@@ -87,92 +87,6 @@ class LazifiedPDAP:
                 x[:, i] = np.clip(column, bounds[0], bounds[1])
             return x
 
-    # def lsi(
-    #     self,
-    #     p_u: Callable,
-    #     u: Measure,
-    #     epsilon: float,
-    #     Phi_A: float,
-    # ) -> tuple:
-    #     # Implementation of the local support improver
-    #     if not len(u.support):
-    #         return (
-    #             np.array([]),
-    #             np.array([]),
-    #             np.array([]),
-    #             np.array([]),
-    #         )  # No points to improve around
-    #     q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
-    #     p_norm = lambda x: np.abs(p_u(x))
-    #     grad_P = self.grad_P(u)
-    #     hess_P = self.hess_P(u)
-    #     lsi_set = u.support.copy()
-
-    #     max_P_A = np.max(p_norm(lsi_set))
-    #     original_P_vals = p_norm(lsi_set)
-    #     processing_array = np.array([True for _ in range(len(lsi_set))])
-    #     P_vals = original_P_vals
-    #     gradients = grad_P(lsi_set)
-    #     gradients_norms = np.linalg.norm(gradients, axis=1)
-
-    #     point_steps = 0
-    #     while point_steps < self.stop_search:
-    #         condition_2_rhs = np.maximum(
-    #             (np.maximum(P_vals - max(self.alpha, max_P_A), 0) + Phi_A / self.M)
-    #             / (4 * self.R),
-    #             self.machine_precision,
-    #         )
-    #         condition_1 = P_vals - original_P_vals < 2 * self.R * gradients_norms
-    #         condition_2 = gradients_norms > condition_2_rhs
-    #         processing_array = condition_1 | condition_2  # element-wise or
-
-    #         if not any(processing_array):
-    #             break
-
-    #         active_indices = np.where(processing_array)[0]
-    #         active_points = lsi_set[active_indices]
-    #         new_points = np.zeros(active_points.shape)
-    #         active_gradients = gradients[active_indices]
-    #         hessians = (
-    #             active_gradients
-    #             if self.projection == "sphere"
-    #             else hess_P(active_points)
-    #         )
-
-    #         for i, (point, gradient, hessian) in enumerate(
-    #             zip(active_points, active_gradients, hessians)
-    #         ):
-    #             try:
-    #                 d = np.linalg.solve(hessian, -gradient)  # Newton step
-    #                 if self.projection == "sphere":
-    #                     projection = np.eye(len(point)) - np.outer(point, point)
-    #                     d = projection @ d
-    #                 new_points[i] = point + d
-    #             except np.linalg.LinAlgError:
-    #                 new_points[i] = point + 0.1 * gradient
-    #         projected_new_points = self.project_into_domain(new_points).copy()
-    #         lsi_set[active_indices] = projected_new_points
-
-    #         P_vals[active_indices] = p_norm(projected_new_points)
-    #         new_gradients = grad_P(projected_new_points)
-    #         gradients[active_indices] = new_gradients
-    #         gradients_norms[active_indices] = np.linalg.norm(new_gradients, axis=1)
-
-    #         point_steps += 1
-
-    #     hat_ind = np.argmax(P_vals - original_P_vals)
-    #     x_hat = lsi_set[hat_ind]
-    #     check_ind = np.argmax(P_vals + 2 * self.R * gradients_norms)
-    #     x_check = lsi_set[check_ind]
-    #     max_ind = np.argmax(P_vals)
-    #     max_val = P_vals[max_ind]
-    #     phi_val = np.max(self.M * (max_val - self.alpha), 0) + q_u
-    #     if phi_val >= self.M * epsilon:
-    #         x_tilde = lsi_set[max_ind]
-    #     else:
-    #         x_tilde = np.array([])
-    #     return x_hat, x_tilde, x_check, lsi_set
-
     def lsi(
         self,
         p_u: Callable,
@@ -183,8 +97,6 @@ class LazifiedPDAP:
         # Implementation of the local support improver
         if not len(u.coefficients):
             return (
-                np.array([]),
-                np.array([]),
                 np.array([]),
                 np.array([]),
                 -1,
@@ -256,17 +168,14 @@ class LazifiedPDAP:
             point_steps += 1
 
         hat_ind = np.argmax(P_vals - original_P_vals)
-        x_hat = lsi_set[hat_ind]
-        check_ind = np.argmax(P_vals + 2 * self.R * gradients_norms)
-        x_check = lsi_set[check_ind]
         max_ind = np.argmax(P_vals)
         max_val = P_vals[max_ind]
-        phi_val = np.max(self.M * (max_val - self.alpha), 0) + q_u
+        phi_val = self.M * max((max_val - self.alpha), 0) + q_u
         if phi_val >= self.M * epsilon:
             x_tilde = lsi_set[max_ind]
         else:
             x_tilde = np.array([])
-        return x_hat, x_tilde, x_check, lsi_set, hat_ind
+        return x_tilde, lsi_set, hat_ind
 
     def get_grid(self, u: Measure) -> np.ndarray:
         if self.projection == "sphere":
@@ -373,52 +282,6 @@ class LazifiedPDAP:
             False,
         )  # Found the global maximum, but it does not satisfy the condition
 
-    # def build_V(self, u: Measure, xi: np.ndarray, xi_val: float, old_V: list) -> tuple:
-    #     if not len(old_V):
-    #         old_V = [[1000] * self.Omega.shape[0]]
-    #     V_local = []
-    #     mu = 0
-    #     sign = np.sign(xi_val)
-    #     support_distances = np.linalg.norm(u.support - xi, axis=1)
-    #     for s_dist, x, c in zip(support_distances, u.support, u.coefficients):
-    #         old_distances = np.linalg.norm(np.array(old_V) - x, axis=1)
-    #         if (
-    #             all(old_distances > self.machine_precision)
-    #             and np.sign(c) == sign
-    #             and s_dist < 2 * self.R
-    #         ):
-    #             V_local.append(x)
-    #             mu += abs(c)
-    #     return V_local, mu
-
-    # def local_measure_constructor(
-    #     self, p_u: Callable, u: Measure, x_hat: np.ndarray, lsi_set: list
-    # ) -> Measure:
-    #     new_support = [x_hat]
-    #     x_hat_val = p_u(x_hat)[0]
-    #     all_V, mu = self.build_V(u, x_hat, x_hat_val, [])
-    #     new_coefficients = [mu * np.sign(p_u(x_hat)[0])]
-    #     p_lsi = p_u(lsi_set)
-    #     P_lsi = np.abs(p_lsi)
-    #     sorted_indices = np.argsort(P_lsi)[::-1]
-    #     lsi_set_sorted = lsi_set[sorted_indices]
-    #     p_lsi_sorted = p_lsi[sorted_indices]
-    #     for x, x_val in zip(lsi_set_sorted, p_lsi_sorted):
-    #         V_x, mu_x = self.build_V(u, x, x_val, all_V)
-    #         if mu_x:
-    #             new_support.append(x)
-    #             new_coefficients.append(mu * np.sign(p_u(x)[0]))
-    #         all_V += V_x
-    #     # Add unused old supports and coefficients
-    #     if not len(all_V):
-    #         all_V = [[1000] * self.Omega.shape[0]]
-    #     for x, c in zip(u.support, u.coefficients):
-    #         all_distances = np.linalg.norm(np.array(all_V) - x, axis=1)
-    #         if all(all_distances > self.machine_precision):
-    #             new_support.append(x)
-    #             new_coefficients.append(c)
-    #     return Measure(new_support, new_coefficients)
-
     def local_measure_constructor(self, u: Measure, lsi_set: np.ndarray) -> Measure:
         new_support = lsi_set.copy()
         new_coefficients = []
@@ -427,7 +290,7 @@ class LazifiedPDAP:
             local_coefs = u.coefficients[support_distances < 2 * self.R]
             new_coefficients.append(np.sum(np.abs(local_coefs)))
         to_return = Measure(new_support, new_coefficients)
-        return Measure(new_support, new_coefficients)
+        return to_return
 
     def finite_dimensional_step(self, u_plus: Measure, Psi: float) -> Measure:
         if not len(u_plus.coefficients):
@@ -457,6 +320,7 @@ class LazifiedPDAP:
                 drop_support.append(point)
                 drop_coefficients.append(coef)
         if len(drop_support) != len(u.support):
+            logging.info(f"dropped {len(u.support)-len(drop_support)} points")
             drop_u = Measure(drop_support, drop_coefficients)
             drop_j = self.j(drop_u)
             true_j = self.j(u)
@@ -473,7 +337,7 @@ class LazifiedPDAP:
             max_P_A = np.max(np.abs(p_u(u.support)))
         else:
             max_P_A = 0
-        Phi_A = max(self.M * (max_P_A - self.alpha), 0) + q_u
+        Phi_A = self.M * max((max_P_A - self.alpha), 0) + q_u
         epsilon = 0.5 * self.j(u) / self.M
         Psi_k = min(Psi_0, self.Psi_0)
         Phi_k = 1e8
@@ -498,28 +362,23 @@ class LazifiedPDAP:
                 p_u = self.p(u)
                 q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
                 max_P_A = np.max(np.abs(p_u(u.support)))
-                Phi_A = max(self.M * (max_P_A - self.alpha), 0) + q_u
+                Phi_A = self.M * max((max_P_A - self.alpha), 0) + q_u
 
-            x_hat_lsi, x_tilde_lsi, x_check_lsi, lsi_set, hat_ind = self.lsi(
-                p_u, u, epsilon, Phi_A
-            )
-            grad_P = self.grad_P(u)
-            if len(lsi_set):
-                logging.info(np.linalg.norm(grad_P(lsi_set), axis=1))
+            x_tilde_lsi, lsi_set, hat_ind = self.lsi(p_u, u, epsilon, Phi_A)
             if len(x_tilde_lsi):
                 x_k = x_tilde_lsi
                 global_valid = True
             else:
                 x_k, global_valid = self.global_search(u, epsilon, q_u, p_u)
-                logging.info(np.linalg.norm(grad_P(np.array([x_k])), axis=1))
 
             # Build Phi_k
-            Phi_k_x_k = np.max(self.M * (np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
+            Phi_k_x_k = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
+            logging.info((np.abs(p_u(x_k))[0] - self.alpha))
             if len(lsi_set):
                 Phi_k_lsi = (
-                    np.max(self.M * (np.max(np.abs(p_u(lsi_set))) - self.alpha), 0)
-                    + q_u
+                    self.M * max((np.max(np.abs(p_u(lsi_set))) - self.alpha), 0) + q_u
                 )
+                logging.info((np.max(np.abs(p_u(lsi_set))) - self.alpha))
             else:
                 Phi_k_lsi = 0
             Phi_k = max(Phi_k_x_k, Phi_k_lsi)
@@ -530,22 +389,12 @@ class LazifiedPDAP:
             objective_values.append(self.j(u))
             Phi_ks.append(Phi_k)
 
-            # Prepare and check for recompute
-            # constant = (
-            #     12
-            #     * self.M
-            #     * self.L
-            #     * self.norm_K_star
-            #     * np.sqrt(Phi_A)
-            #     / np.sqrt(self.gamma)
-            #     + 2 * Phi_A
-            # )
-            # if constant > Phi_k and Psi_k > self.machine_precision:
+            # Check for recompute
             if Phi_A > 0.5 * Phi_k and Psi_k > self.machine_precision:
                 # Recompute step and update running metrics
                 Psi_k = max(Psi_k / 2, self.machine_precision)
                 logging.info(
-                    f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}"  # , constant:{constant:.3E}, dropped:{dropped}"
+                    f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, dropped:{dropped}"
                 )
                 steps.append("recompute")
                 s += 1
@@ -569,31 +418,31 @@ class LazifiedPDAP:
                     mu_k = v_tilde.coefficients[hat_ind]
                 else:
                     mu_k = 0
-                c_1k = (
-                    4
-                    * self.norm_kappa1
-                    * np.sqrt(mu_k)
+                denominator = (
+                    16
+                    * self.M**2
+                    * self.L
+                    * self.norm_kappa1**2
                     * (
-                        1
-                        + np.sqrt(mu_k * self.Omega.shape[0])
-                        * self.norm_kappa1
-                        * self.L
-                        * (1 + 8 * max(self.alpha, self.theta * self.R**2) / self.alpha)
-                        / np.sqrt(self.gamma)
+                        len(lsi_set)
+                        + 2
+                        * np.sqrt(self.M / self.theta)
+                        * (
+                            np.sqrt(8 * self.R)
+                            + self.norm_kappa1
+                            * self.L
+                            * np.sqrt(self.Omega.shape[0] / self.gamma)
+                            * (
+                                1
+                                + 8
+                                * max(self.alpha, self.R**2 * self.theta)
+                                / self.alpha
+                            )
+                        )
                     )
-                    / self.theta
+                    ** 2
                 )
-                c_2k = self.theta * self.norm_kappa1 * mu_k * np.sqrt(2 * self.R) / 8
-                nu = min(1, mu_k / (4 * self.M * self.L * (c_1k + c_2k) ** 2))
-                # nu_constant = 4 * (
-                #     32
-                #     * self.L
-                #     * self.M**2
-                #     * self.norm_K_star_L**2
-                #     * (1 + self.L * self.norm_K_star / (np.sqrt(self.gamma)))
-                #     / self.theta
-                # )
-                # nu = min(1, abs(v_tilde.coefficients[0]) / nu_constant)
+                nu = min(1, mu_k * self.theta / denominator)
                 u_plus_tilde = u * (1 - nu) + v_tilde * nu
             else:
                 u_plus_tilde = u * 1  # Create a new measure with the same parameters
@@ -621,8 +470,8 @@ class LazifiedPDAP:
         p_u = self.p(u)
         q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
         x, global_valid = self.global_search(u, 1000, q_u, p_u)
-        P_value = np.abs(p_u(x))
-        Phi_k = np.max(self.M * (P_value - self.alpha), 0) + q_u
+        P_value = np.abs(p_u(x))[0]
+        Phi_k = self.M * max((P_value - self.alpha), 0) + q_u
         P_values = [P_value]
         initial_time = time.time()
         times = [time.time() - initial_time]
@@ -637,8 +486,8 @@ class LazifiedPDAP:
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
 
             x, global_valid = self.global_search(u, 1000, q_u, p_u)
-            P_value = np.abs(p_u(x))
-            Phi_k = np.max(self.M * (P_value - self.alpha), 0) + q_u
+            P_value = np.abs(p_u(x))[0]
+            Phi_k = self.M * max((P_value - self.alpha), 0) + q_u
             logging.info(
                 f"{k}: Phi:{Phi_k:.3E}, support: {u.support}, coefs: {u.coefficients}, x: {x}"
             )
@@ -730,7 +579,7 @@ class LazifiedPDAP:
 
     def lgcg_step(self, p_u: Callable, u: Measure, epsilon: float, q_u: float) -> tuple:
         x_k, global_valid = self.global_search(u, epsilon, q_u, p_u)
-        Phi = np.max(self.M * (np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
+        Phi = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
         eta = min(1, Phi / self.C)
         if Phi > q_u:
             v = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
@@ -752,7 +601,6 @@ class LazifiedPDAP:
             points, coefs
         )
         ineq73 = j_tilde_diff <= -0.125 * self.m * norm_grad**2
-        # logging.info(f"diff: {j_tilde_diff}, grad_norm: {norm_grad}")
         try:
             ineq75 = (
                 np.linalg.norm(np.linalg.solve(hess_j_z, grad_j_z)) / norm_grad

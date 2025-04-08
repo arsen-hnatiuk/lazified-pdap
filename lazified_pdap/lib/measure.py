@@ -34,15 +34,14 @@ class Measure:
                 self.support = np.vstack([self.support, point])
                 self.coefficients = np.append(self.coefficients, 0)
 
-    def duality_pairing(self, fct_in: Union[np.ndarray, Callable]) -> float:
+    def duality_pairing(self, fct: Union[np.ndarray, Callable]) -> float:
         # Compute the duality pairing of the measure with a function defined on Omega
         if not len(self.support):
             return 0
-        if type(fct_in) == np.ndarray:
-            fct = lambda x: fct_in[x.flatten()]  # turn matrix into Callable
+        if type(fct) == np.ndarray:
+            values = fct[self.support.flatten()]
         else:
-            fct = fct_in
-        values = fct(self.support.copy())
+            values = fct(self.support.copy())
         if len(values.shape) > 1:
             values = values.T
             result = values @ self.coefficients

@@ -19,11 +19,6 @@ class LazifiedPDAPFinite:
         K_transpose: np.ndarray,
         alpha: float = 1,
     ) -> None:
-        K = np.append(
-            K,
-            np.ones((K.shape[0], 1)),
-            axis=1,
-        )  # Adding a constant term
         self.K_norms = np.linalg.norm(K_transpose, axis=1)
         self.K_norms[self.K_norms == 0] = 1  # Avoid division by zero
         self.K_transpose = np.divide(K_transpose, self.K_norms.reshape(-1, 1))
@@ -48,12 +43,12 @@ class LazifiedPDAPFinite:
 
     def explicit_Phi(self, p: np.ndarray, u: np.ndarray, v: np.ndarray) -> float:
         # <p(u),v-u>+g(u)-g(v)
-        return (v - u).duality_pairing(p) + self.g(u) - self.g(v)
+        return (v + (u * -1)).duality_pairing(p) + self.g(u) - self.g(v)
 
     def Phi(self, p_u: np.ndarray, u: Measure, x: int) -> float:
         # M*max{0,||p_u||-alpha}+g(u)-<p_u,u>
         return (
-            self.M * (max(0, np.absolute(p_u[x]) - self.alpha))
+            self.M * (max(0, np.abs(p_u[x]) - self.alpha))
             + self.g(u)
             - u.duality_pairing(p_u)
         )
@@ -76,7 +71,7 @@ class LazifiedPDAPFinite:
         u = self.u_0 * 1
         residuum_u = self.residuum(u)
         p_u = -self.K_transpose @ residuum_u
-        x = np.argmax(np.absolute(p_u))
+        x = np.argmax(np.abs(p_u))
         epsilon = 0.5 * self.j(u) / self.M
         Psi = epsilon
         k = 1
@@ -97,7 +92,7 @@ class LazifiedPDAPFinite:
             eta = min(1, Phi_x / self.C)
             u = u * (1 - eta) + v_k * eta
 
-            if not np.array_equal(u, u_old) or Psi_old != Psi:
+            if not np.array_equal(u.coefficients, u_old.coefficients) or Psi_old != Psi:
                 # Low-dimensional optimization
                 ssn_start = time.time()
                 u = self.finite_dimensional_step(u, Psi)
@@ -109,7 +104,7 @@ class LazifiedPDAPFinite:
                     # SSN found a different solution
                     residuum_u = self.residuum(u)
                     p_u = -self.K_transpose @ residuum_u
-                    x = np.argmax(np.absolute(p_u))
+                    x = np.argmax(np.abs(p_u))
                     Phi_value = self.Phi(p_u, u, x)
 
             logging.info(
@@ -130,7 +125,7 @@ class LazifiedPDAPFinite:
         u = self.u_0 * 1
         residuum_u = self.residuum(u)
         p_u = -self.K_transpose @ residuum_u
-        x = np.argmax(np.absolute(p_u))
+        x = np.argmax(np.abs(p_u))
         k = 1
         Phi_value = self.Phi(p_u, u, x)
         start_time = time.time()
@@ -144,7 +139,7 @@ class LazifiedPDAPFinite:
             ssn_time += time.time() - ssn_start
             residuum_u = self.residuum(u)
             p_u = -self.K_transpose @ residuum_u
-            x = np.argmax(np.absolute(p_u))
+            x = np.argmax(np.abs(p_u))
             Phi_value = self.Phi(p_u, u, x)
 
             logging.info(f"{k}: Phi {Phi_value:.3E}, support {u.support}")
