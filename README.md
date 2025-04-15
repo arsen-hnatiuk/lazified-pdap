@@ -1,5 +1,5 @@
-# lazified-generalized-conditional-gradient
-Implementation of the Lazified PDAP algorithm, as well as 
+# lazified-pdap
+Implementation of the Lazified PDAP algorithm, as well as the Newton variants.
 
 To create a conda environment with the required dependencies, run the command
 ```

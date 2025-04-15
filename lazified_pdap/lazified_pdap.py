@@ -113,33 +113,28 @@ class LazifiedPDAP:
         for point in full_set[1:]:
             if np.linalg.norm(point - lsi_set, axis=1).min() > 2 * self.R:
                 lsi_set = np.vstack((lsi_set, point))
+        start_set = lsi_set.copy()
 
         original_P_vals = p_norm(lsi_set)
-        processing_array = np.array([True for _ in range(len(lsi_set))])
         P_vals = original_P_vals
         gradients = grad_P(lsi_set)
         gradients_norms = np.linalg.norm(gradients, axis=1)
 
+        condition_1_lhs = np.maximum(P_vals - original_P_vals, self.machine_precision)
+        condition_2_rhs = np.maximum(
+            np.minimum(
+                (np.maximum(P_vals - max(self.alpha, max_P_A), 0) + Phi_A / self.M)
+                / (4 * self.R),
+                Phi_A,
+            ),
+            0.5 * self.machine_precision,
+        )
+        condition_1 = condition_1_lhs < 2 * self.R * gradients_norms
+        condition_2 = gradients_norms > condition_2_rhs
+        processing_array = condition_1 | condition_2  # element-wise or
+
         point_steps = 0
         while any(processing_array) and point_steps < self.stop_search:
-            condition_1_lhs = np.maximum(
-                P_vals - original_P_vals, self.machine_precision
-            )
-            condition_2_rhs = np.maximum(
-                np.minimum(
-                    (np.maximum(P_vals - max(self.alpha, max_P_A), 0) + Phi_A / self.M)
-                    / (4 * self.R),
-                    Phi_A,
-                ),
-                0.5 * self.machine_precision,
-            )
-            condition_1 = condition_1_lhs < 2 * self.R * gradients_norms
-            condition_2 = gradients_norms > condition_2_rhs
-            processing_array = condition_1 | condition_2  # element-wise or
-
-            if not any(processing_array):
-                break
-
             active_indices = np.where(processing_array)[0]
             active_points = lsi_set[active_indices]
             new_points = np.zeros(active_points.shape)
@@ -165,7 +160,38 @@ class LazifiedPDAP:
             gradients[active_indices] = new_gradients
             gradients_norms[active_indices] = np.linalg.norm(new_gradients, axis=1)
 
+            condition_1_lhs = np.maximum(
+                P_vals - original_P_vals, self.machine_precision
+            )
+            condition_2_rhs = np.maximum(
+                np.minimum(
+                    (np.maximum(P_vals - max(self.alpha, max_P_A), 0) + Phi_A / self.M)
+                    / (4 * self.R),
+                    Phi_A,
+                ),
+                0.5 * self.machine_precision,
+            )
+            distances = np.linalg.norm(lsi_set - start_set, axis=1)
+            condition_1 = condition_1_lhs < 2 * self.R * gradients_norms
+            condition_2 = gradients_norms > condition_2_rhs
+            distance_condition = distances > 2 * self.R
+            processing_array = (
+                condition_1 | condition_2 | distance_condition
+            )  # element-wise or
+
             point_steps += 1
+
+        # discard invalid points
+        lsi_set = lsi_set[~processing_array]
+        P_vals = P_vals[~processing_array]
+        original_P_vals = original_P_vals[~processing_array]
+
+        if not len(lsi_set):
+            return (
+                np.array([]),
+                np.array([]),
+                -1,
+            )
 
         hat_ind = np.argmax(P_vals - original_P_vals)
         max_ind = np.argmax(P_vals)
@@ -223,21 +249,16 @@ class LazifiedPDAP:
         phi_val = np.max(self.M * (best_val - self.alpha), 0) + q_u
         if phi_val >= self.M * epsilon:
             return grid[max_ind], True  # Found a desired point
-        processing_array = np.array(
-            [True for point in grid]
-        )  # If the point is still being optimized
         point_steps = 0
-        while any(processing_array) and point_steps < self.stop_search:
-            active_indices = np.where(processing_array)[0]
+        while point_steps < self.stop_search:
             batching_factor = (
                 len(self.target) * self.Omega.shape[0] * (self.Omega.shape[0] + 1)
                 + 2 * self.Omega.shape[0]
                 + 1
             )
             batch_size = int(self.batching_constant // batching_factor)
-            for batch in gen_batches(len(active_indices), batch_size):
-                batch_indices = active_indices[batch]
-                batch_points = grid[batch_indices]
+            for batch in gen_batches(len(grid), batch_size):
+                batch_points = grid[batch]
                 new_points = np.zeros(batch_points.shape)
                 gradients = grad_P(batch_points)
                 hessians = hess_P(batch_points)
@@ -266,8 +287,8 @@ class LazifiedPDAP:
                     phi_val = np.max(self.M * (best_val - self.alpha), 0) + q_u
                     if phi_val >= self.M * epsilon:
                         return best_point, True  # Found a desired point
-                grid[batch_indices] = projected_new_points
-                grid_vals[batch_indices] = p_vals
+                grid[batch] = projected_new_points
+                grid_vals[batch] = p_vals
 
                 del new_points
                 del projected_new_points
@@ -288,7 +309,7 @@ class LazifiedPDAP:
         for point in new_support:
             support_distances = np.linalg.norm(u.support - point, axis=1)
             local_coefs = u.coefficients[support_distances < 2 * self.R]
-            new_coefficients.append(np.sum(np.abs(local_coefs)))
+            new_coefficients.append(np.sum(local_coefs))
         to_return = Measure(new_support, new_coefficients)
         return to_return
 
@@ -320,7 +341,6 @@ class LazifiedPDAP:
                 drop_support.append(point)
                 drop_coefficients.append(coef)
         if len(drop_support) != len(u.support):
-            logging.info(f"dropped {len(u.support)-len(drop_support)} points")
             drop_u = Measure(drop_support, drop_coefficients)
             drop_j = self.j(drop_u)
             true_j = self.j(u)
@@ -348,6 +368,7 @@ class LazifiedPDAP:
         k = 1
         s = 1
         Phi_ks = []
+        epsilons = []
         initial_time = time.time()
         times = []
         supports = []
@@ -373,12 +394,10 @@ class LazifiedPDAP:
 
             # Build Phi_k
             Phi_k_x_k = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
-            logging.info((np.abs(p_u(x_k))[0] - self.alpha))
             if len(lsi_set):
                 Phi_k_lsi = (
                     self.M * max((np.max(np.abs(p_u(lsi_set))) - self.alpha), 0) + q_u
                 )
-                logging.info((np.max(np.abs(p_u(lsi_set))) - self.alpha))
             else:
                 Phi_k_lsi = 0
             Phi_k = max(Phi_k_x_k, Phi_k_lsi)
@@ -388,6 +407,7 @@ class LazifiedPDAP:
             supports.append(len(u.support))
             objective_values.append(self.j(u))
             Phi_ks.append(Phi_k)
+            epsilons.append(epsilon)
 
             # Check for recompute
             if Phi_A > 0.5 * Phi_k and Psi_k > self.machine_precision:
@@ -462,7 +482,7 @@ class LazifiedPDAP:
             )
             logging.info("==============================================")
             k += 1
-        return u, Phi_ks, times, supports, objective_values, dropped_tot
+        return u, Phi_ks, times, supports, objective_values, dropped_tot, epsilons
 
     def pdap(self, tol: float, u_0: Measure = Measure()) -> tuple:
         k = 1
@@ -641,13 +661,14 @@ class LazifiedPDAP:
         supports = [0]
         inner_loop = [0]
         objective_values = [self.j(u_minus)]
+        epsilons = [epsilon]
         inner_lazy = 0
         inner_total = 0
         outer_lazy = 0
         outer_total = 0
         while 2 * self.M * epsilon > tol:
-            # LocalRoutine
             if len(u_minus.coefficients):
+                # LocalRoutine
                 s = 1
                 points, coefs = self.local_merging(u_minus)
                 u_ks = Measure(points, coefs)
@@ -661,8 +682,17 @@ class LazifiedPDAP:
                 u_hat_plus, epsilon_ks_plus, global_valid = self.lgcg_step(
                     p_u_ks, u_ks, epsilon_ks, q_u_ks
                 )
+
                 inner_lazy += int(global_valid)
                 inner_total += 1
+                times.append(time.time() - initial_time)
+                supports.append(len(u_ks.support))
+                inner_loop.append(1)
+                objective_values.append(self.j(u_ks))
+                epsilons.append(epsilon_ks)
+                logging.info(
+                    f"{k}, {s}: lazy: {global_valid}, support: {u_ks.support}, coefs: {u_ks.coefficients}, epsilon: {epsilon_ks_plus}, objective: {self.j(u_ks):.3E}"
+                )
 
                 # Regularity conditions
                 ineq73, ineq75, ineq78, tol_ineq, M_ineq = (
@@ -673,14 +703,6 @@ class LazifiedPDAP:
 
                 logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}, {M_ineq}")
                 while ineq73 and ineq75 and ineq78 and tol_ineq and M_ineq:
-                    times.append(time.time() - initial_time)
-                    supports.append(len(u_ks.support))
-                    inner_loop.append(1)
-                    objective_values.append(self.j(u_ks))
-                    logging.info(
-                        f"{k}, {s}: lazy: {global_valid}, support: {u_ks.support}, coefs: {u_ks.coefficients}, epsilon: {epsilon_ks_plus}, objective: {self.j(u_ks):.3E}"
-                    )
-
                     s += 1
                     points, coefs = points_plus.copy(), coefs_plus.copy()
                     u_ks = u_ks_plus * 1
@@ -703,6 +725,14 @@ class LazifiedPDAP:
                         self.get_regularity_inequalities(
                             points, coefs, points_plus, coefs_plus, epsilon_ks_plus, tol
                         )
+                    )
+                    times.append(time.time() - initial_time)
+                    supports.append(len(u_ks.support))
+                    inner_loop.append(1)
+                    objective_values.append(self.j(u_ks))
+                    epsilons.append(epsilon_ks)
+                    logging.info(
+                        f"{k}, {s}: lazy: {global_valid}, support: {u_ks.support}, coefs: {u_ks.coefficients}, epsilon: {epsilon_ks_plus}, objective: {self.j(u_ks):.3E}"
                     )
                     logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}, {M_ineq}")
 
@@ -735,6 +765,7 @@ class LazifiedPDAP:
             supports.append(len(u.support))
             inner_loop.append(0)
             objective_values.append(self.j(u))
+            epsilons.append(epsilon)
             logging.info(
                 f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {u.support}, epsilon: {epsilon}, objective: {self.j(u):.3E}, dropped:{dropped}"
             )
@@ -751,4 +782,5 @@ class LazifiedPDAP:
             outer_total,
             objective_values,
             dropped_tot,
+            epsilons,
         )
