@@ -393,14 +393,7 @@ class LazifiedPDAP:
                 x_k, global_valid = self.global_search(u, epsilon, q_u, p_u)
 
             # Build Phi_k
-            Phi_k_x_k = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
-            if len(lsi_set):
-                Phi_k_lsi = (
-                    self.M * max((np.max(np.abs(p_u(lsi_set))) - self.alpha), 0) + q_u
-                )
-            else:
-                Phi_k_lsi = 0
-            Phi_k = max(Phi_k_x_k, Phi_k_lsi)
+            Phi_k = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
 
             # update metrics
             times.append(time.time() - initial_time)
@@ -421,15 +414,15 @@ class LazifiedPDAP:
                 continue
 
             # LGCG step
-            eta = min(1, Phi_k_x_k / self.C)
-            if Phi_k_x_k > q_u:
+            eta = min(1, Phi_k / self.C)
+            if Phi_k > q_u:
                 v_k = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
             else:
                 v_k = Measure()
             u_plus_hat = u * (1 - eta) + v_k * eta
             if not global_valid:
                 # We have a global maximum x_k
-                epsilon = 0.5 * Phi_k_x_k / self.M
+                epsilon = 0.5 * Phi_k / self.M
 
             # LSI step
             if len(lsi_set):
@@ -440,29 +433,21 @@ class LazifiedPDAP:
                     mu_k = 0
                 denominator = (
                     16
-                    * self.M**2
+                    * self.M
                     * self.L
                     * self.norm_kappa1**2
                     * (
-                        len(lsi_set)
+                        2 * self.M * np.sqrt(self.R / self.theta)
                         + 2
-                        * np.sqrt(self.M / self.theta)
-                        * (
-                            np.sqrt(8 * self.R)
-                            + self.norm_kappa1
-                            * self.L
-                            * np.sqrt(self.Omega.shape[0] / self.gamma)
-                            * (
-                                1
-                                + 8
-                                * max(self.alpha, self.R**2 * self.theta)
-                                / self.alpha
-                            )
-                        )
+                        * self.M
+                        * self.norm_kappa1**2
+                        * self.L
+                        / (self.theta * np.sqrt(self.gamma))
+                        + np.sqrt(self.M / self.theta)
                     )
                     ** 2
                 )
-                nu = min(1, mu_k * self.theta / denominator)
+                nu = min(1, mu_k / denominator)
                 u_plus_tilde = u * (1 - nu) + v_tilde * nu
             else:
                 u_plus_tilde = u * 1  # Create a new measure with the same parameters
