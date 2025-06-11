@@ -313,19 +313,37 @@ class LazifiedPDAP:
         to_return = Measure(new_support, new_coefficients)
         return to_return
 
-    def finite_dimensional_step(self, u_plus: Measure, Psi: float) -> Measure:
-        if not len(u_plus.coefficients):
-            return u_plus
-        K_support = self.kappa(u_plus.support).T
-        ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
-        u_raw = ssn.solve(tol=Psi, u_0=u_plus.coefficients)
+    def finite_dimensional_step(
+        self, u: Measure, Psi: float, mode: str = "unconstrained"
+    ) -> tuple:
+        if not len(u.coefficients):
+            return u
+        K_support = self.kappa(u.support).T
+        if mode == "positive":
+            p_u = self.p(u)
+            signs = np.sign(p_u(u.support))
+            K_support = np.multiply(K_support, signs)
+            u_0 = np.clip(u.coefficients * signs, 0, np.max(np.abs(u.coefficients)))
+        else:
+            u_0 = u.coefficients.copy()
+        ssn = SSN(
+            K=K_support, alpha=self.alpha, target=self.target, M=self.M, mode=mode
+        )
+        u_raw = ssn.solve(tol=Psi, u_0=u_0)
         u_raw[np.abs(u_raw) < self.machine_precision] = 0
+        if mode == "positive":
+            u_raw = u_raw * signs
         # Reconstruct u
-        u = Measure(
-            support=u_plus.support[u_raw != 0].copy(),
+        u_plus = Measure(
+            support=u.support[u_raw != 0].copy(),
             coefficients=u_raw[u_raw != 0].copy(),
         )
-        return u
+        if mode == "positive":
+            if self.j(u_plus) < self.j(u):
+                return u_plus, ssn.Psi(u_raw)
+            else:
+                return u, ssn.Psi(u_0)
+        return u_plus, ssn.Psi(u_raw)  # Unconstrained case
 
     def drop_step(self, u: Measure) -> tuple:
         p_u = self.p(u)
@@ -378,7 +396,9 @@ class LazifiedPDAP:
             if len(u_plus.coefficients):
                 # Low-dimensional step
                 u_dropped, dropped = self.drop_step(u_plus)
-                u = self.finite_dimensional_step(u_dropped, Psi_k)
+                u, finite_Phi = self.finite_dimensional_step(
+                    u_dropped, Psi_k, mode="positive"
+                )
                 dropped_tot += dropped
                 p_u = self.p(u)
                 q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
@@ -403,7 +423,12 @@ class LazifiedPDAP:
             epsilons.append(epsilon)
 
             # Check for recompute
-            if Phi_A > 0.5 * Phi_k and Psi_k > self.machine_precision:
+            if (
+                len(u_plus.coefficients)
+                and finite_Phi <= Psi_k
+                and finite_Phi > 0.5 * Phi_k
+                and Psi_k > self.machine_precision
+            ):
                 # Recompute step and update running metrics
                 Psi_k = max(Psi_k / 2, self.machine_precision)
                 logging.info(
