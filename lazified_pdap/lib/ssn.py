@@ -143,8 +143,10 @@ class SSN:
                     )
                     return prox_q
                     # return self.rebalance(tol, prox_q)
+            last_tol = tol
             tol = max(tol / 2, self.machine_precision)
             k += 1
+        tol = last_tol
 
         logging.debug(
             f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
