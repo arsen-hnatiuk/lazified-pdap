@@ -302,13 +302,12 @@ class LazifiedPDAP:
         self, u: Measure, Psi: float, mode: str = "unconstrained"
     ) -> tuple:
         if not len(u.coefficients):
-            return u
+            return u, Psi * 2
         K_support = self.kappa(u.support).T
         if mode == "positive":
             signs = np.sign(u.coefficients)
             K_support = np.multiply(K_support, signs)
             u_0 = np.abs(u.coefficients)
-            # u_0 = np.clip(u.coefficients * signs, 0, np.max(np.abs(u.coefficients)))
         else:
             u_0 = u.coefficients.copy()
         ssn = SSN(
@@ -316,7 +315,6 @@ class LazifiedPDAP:
         )
         u_raw = ssn.solve(tol=Psi, u_0=u_0)
         raw_Psi = ssn.Psi(u_raw)
-        # u_raw[np.abs(u_raw) < self.machine_precision] = 0
         if mode == "positive":
             u_raw = u_raw * signs
         # Reconstruct u
@@ -325,12 +323,6 @@ class LazifiedPDAP:
             coefficients=u_raw[u_raw != 0].copy(),
         )
         return u_plus, raw_Psi
-        # if mode == "positive":
-        # if self.j(u_plus) <= self.j(u):  # < self.machine_precision:
-        # return u_plus, raw_Psi
-        # else:
-        #     return u, ssn.Psi(u_0)
-        return u_plus, raw_Psi  # Unconstrained case
 
     def drop_step(self, u: Measure) -> tuple:
         p_u = self.p(u)
@@ -386,6 +378,7 @@ class LazifiedPDAP:
                 u, finite_Phi = self.finite_dimensional_step(
                     u_dropped, Psi_k, mode="positive"
                 )
+                self.M = min(self.M, self.j(u) / self.alpha)
                 dropped_tot += dropped
                 p_u = self.p(u)
                 q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
@@ -425,7 +418,7 @@ class LazifiedPDAP:
                 continue
 
             # LGCG step
-            eta = max(min(1, Phi_k / self.C), self.machine_precision)
+            eta = min(1, Phi_k / self.C)
             if Phi_k > q_u:
                 v_k = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
             else:
@@ -458,7 +451,7 @@ class LazifiedPDAP:
                     )
                     ** 2
                 )
-                nu = max(min(1, mu_k / denominator), self.machine_precision)
+                nu = min(1, mu_k / denominator)
                 u_plus_tilde = u * (1 - nu) + v_tilde * nu
             else:
                 u_plus_tilde = u * 1  # Create a new measure with the same parameters
@@ -478,6 +471,7 @@ class LazifiedPDAP:
             )
             logging.info("==============================================")
             k += 1
+        self.M = self.j(self.u_0) / self.alpha
         return u, Phi_ks, times, supports, objective_values, dropped_tot, epsilons
 
     def pdap(self, tol: float, u_0: Measure = Measure()) -> tuple:
@@ -497,7 +491,8 @@ class LazifiedPDAP:
             v_k = Measure(support=np.array([x]), coefficients=[1])
             eta = min(1, Phi_k / self.C)
             u_plus = u * (1 - eta) + v_k * eta
-            u = self.finite_dimensional_step(u_plus, self.machine_precision)
+            u, finite_Psi = self.finite_dimensional_step(u_plus, tol)
+            self.M = min(self.M, self.j(u) / self.alpha)
             p_u = self.p(u)
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
 
@@ -511,9 +506,13 @@ class LazifiedPDAP:
             times.append(time.time() - initial_time)
             supports.append(len(u.support))
             objective_values.append(self.j(u))
+        self.M = self.j(self.u_0) / self.alpha
         return u, P_values, times, supports, objective_values
 
     def local_merging(self, u: Measure) -> tuple:
+        if not len(u.coefficients):
+            return np.array([]), np.array([])
+
         p_u = self.p(u)
         p_norm = lambda x: np.abs(p_u(x))
         sorting_indices = np.argsort(p_norm(u.support))[::-1]
@@ -537,24 +536,6 @@ class LazifiedPDAP:
                     )
                 )
         return merge_set, np.array(merge_coefs)
-
-        # tuples = [(x, c) for x, c in zip(u.support, u.coefficients)]
-        # new_tuples = []
-        # already_merged = []
-        # for ind, (x, c) in enumerate(tuples):
-        #     if ind not in already_merged:
-        #         c_new = c
-        #         already_merged.append(ind)
-        #         for ind_local, (x_local, c_local) in enumerate(tuples):
-        #             if ind_local not in already_merged:
-        #                 if np.linalg.norm(x - x_local) < 2 * self.R:
-        #                     c_new += c_local
-        #                     already_merged.append(ind_local)
-        #         new_tuples.append((x, c_new))
-        # new_points, new_coefs = tuple(zip(*new_tuples))
-        # new_points = np.array(list(new_points))
-        # new_coefs = np.array(list(new_coefs))
-        # return new_points, new_coefs
 
     def newton_step(
         self,
@@ -601,7 +582,7 @@ class LazifiedPDAP:
                 ] = projection_part
             update_direction = projection @ update_direction
         # Transform vector into tuples
-        coafs_new = coefs + nu * update_direction[-len(coefs) :]
+        coefs_new = coefs + nu * update_direction[-len(coefs) :]
         for i, point in enumerate(points):
             new_point = point + (
                 nu
@@ -616,7 +597,7 @@ class LazifiedPDAP:
     def lgcg_step(self, p_u: Callable, u: Measure, epsilon: float, q_u: float) -> tuple:
         x_k, global_valid = self.global_search(u, epsilon, q_u, p_u)
         Phi = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
-        eta = max(min(1, Phi / self.C), self.machine_precision)
+        eta = min(1, Phi / self.C)
         if Phi > q_u:
             v = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
         else:
@@ -626,35 +607,6 @@ class LazifiedPDAP:
             # We have a global maximum x_k
             epsilon = 0.5 * Phi / self.M
         return u_plus, epsilon, global_valid
-
-    # def get_regularity_inequalities(
-    #     self, points, coefs, points_plus, coefs_plus, epsilon_plus, tol
-    # ) -> tuple:
-    #     grad_j_z = self.grad_j(points, coefs)
-    #     norm_grad = np.linalg.norm(grad_j_z)
-    #     hess_j_z = self.hess_j(points, coefs)
-    #     j_tilde_diff = self.j_tilde(points_plus, coefs_plus) - self.j_tilde(
-    #         points, coefs
-    #     )
-    #     ineq73 = j_tilde_diff <= -0.125 * self.m * norm_grad**2
-    #     try:
-    #         ineq75 = (
-    #             np.linalg.norm(np.linalg.solve(hess_j_z, grad_j_z)) / norm_grad
-    #             <= 2 * self.bar_m
-    #         )
-    #     except np.linalg.LinAlgError:
-    #         ineq75 = False
-    #     if self.M * epsilon_plus <= self.C:
-    #         ineq78 = norm_grad**2 >= self.M**2 * epsilon_plus**2 / (
-    #             2 * self.bar_m * self.C
-    #         )
-    #     else:
-    #         ineq78 = norm_grad**2 >= (2 * self.M * epsilon_plus - self.C) / (
-    #             2 * self.bar_m
-    #         )
-    #     tol_ineq = 2 * self.M * epsilon_plus >= tol
-    #     M_ineq = np.linalg.norm(coefs_plus, ord=1) <= self.M
-    #     return ineq73, ineq75, ineq78, tol_ineq, M_ineq
 
     def first_inequalities(
         self,
@@ -690,6 +642,7 @@ class LazifiedPDAP:
             ineq = norm_grad**2 >= self.M**2 * epsilon**2 / (2 * self.bar_m * self.C)
         else:
             ineq = norm_grad**2 >= (2 * self.M * epsilon - self.C) / (2 * self.bar_m)
+        return ineq
 
     def newton(
         self,
@@ -700,57 +653,42 @@ class LazifiedPDAP:
         u_0: Measure = Measure(),
         Psi_0: float = 1,
     ) -> tuple:
-        u = u_0 * 1
-        epsilon = 0.5 * self.j(u) / self.M
+        epsilon = 0.5 * self.j(u_0) / self.M
         Psi_k = min(Psi_0, self.Psi_0)
-        k = 1
+        k = 0
         dropped = False
+        optimal = False
         dropped_tot = 0
         initial_time = time.time()
         times = [time.time() - initial_time]
         supports = [0]
         inner_loop = [0]
-        objective_values = [self.j(u)]
+        objective_values = [self.j(u_0)]
         epsilons = [epsilon]
         lgcg_lazy = 0
         lgcg_total = 0
+
+        u_plus = u_0 * 1
         while 2 * self.M * epsilon > tol:
-            p_u = self.p(u)
-            q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
-            u_gcg, epsilon, global_valid = self.lgcg_step(p_u, u, epsilon, q_u)
-            lgcg_lazy += int(global_valid)
-            lgcg_total += 1
-
-            if len(u_gcg.coefficients):
-                u_drop, dropped = self.drop_step(u_gcg)
-                u, finite_psi = self.finite_dimensional_step(u_drop, Psi_k)
-                dropped_tot += dropped
-            else:
-                u = u_gcg * 1
-
+            u = u_plus * 1
             points, coefs = self.local_merging(u)
             u_ks = Measure(points, coefs)
-            epsilon_ks = epsilon + 0.5 * (self.j(u_ks) - self.j(u_drop)) / self.M
+            local_M = self.j(u_ks) / self.alpha
+            epsilon_ks = epsilon + 0.5 * (self.j(u_ks) - self.j(u)) / self.M
             p_u_ks = self.p(u_ks)
             q_u_ks = self.g(u_ks.coefficients) - u_ks.duality_pairing(p_u_ks)
             u_ks_gcg = u_ks * 1
             u_ks_new = u_ks * 1
             u_lm = u_ks * 1
 
+            s = 0
             while len(u_ks.coefficients):
                 # Inner loop
-                s = 1
                 points_new, coefs_new = self.newton_step(
                     points, coefs, damped, damping_root
                 )
                 u_ks_new = Measure(points_new, coefs_new)
 
-                first_inequalities = self.first_inequalities(
-                    points, coefs, points_new, coefs_new
-                )
-                if not all(first_inequalities):
-                    logging.info(first_inequalities)
-                    break
                 second_inequality = self.second_inequality(points, coefs, epsilon_ks)
                 if not second_inequality:
                     u_ks_gcg, epsilon_ks, global_valid = self.lgcg_step(
@@ -760,11 +698,51 @@ class LazifiedPDAP:
                     lgcg_total += 1
                 else:
                     global_valid = "N/A"
+                if 2 * local_M * epsilon_ks <= tol:  # Optimality reached
+                    optimal = True
+                    s += 1
+                    times.append(time.time() - initial_time)
+                    supports.append(len(u_ks.support))
+                    inner_loop.append(1)
+                    objective_values.append(self.j(u_ks))
+                    epsilons.append(epsilon_ks)
+                    logging.info(
+                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
+                    )
+                    break
+                else:
+                    optimal = False
                 second_inequality = self.second_inequality(points, coefs, epsilon_ks)
                 if not second_inequality:
+                    s += 1
+                    times.append(time.time() - initial_time)
+                    supports.append(len(u_ks_new.support))
+                    inner_loop.append(1)
+                    objective_values.append(self.j(u_ks_new))
+                    epsilons.append(epsilon_ks)
+                    logging.info(
+                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
+                    )
+                    logging.info(second_inequality)
                     break
 
-                if s % drop_frequency == 0:
+                first_inequalities = self.first_inequalities(
+                    points, coefs, points_new, coefs_new
+                )
+                if not all(first_inequalities):
+                    s += 1
+                    times.append(time.time() - initial_time)
+                    supports.append(len(u_ks_new.support))
+                    inner_loop.append(1)
+                    objective_values.append(self.j(u_ks_new))
+                    epsilons.append(epsilon_ks)
+                    logging.info(
+                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
+                    )
+                    logging.info(first_inequalities)
+                    break
+
+                if s + 1 % drop_frequency == 0:
                     u_ks_drop, dropped = self.drop_step(u_ks_new)
                     dropped_tot += dropped
                     points, coefs = self.local_merging(u_ks_drop)
@@ -776,107 +754,48 @@ class LazifiedPDAP:
                     u_ks = u_ks_new * 1
                     points = points_new.copy()
                     coefs = coefs_new.copy()
+                local_M = self.j(u_ks) / self.alpha
                 p_u_ks = self.p(u_ks)
                 q_u_ks = self.g(u_ks.coefficients) - u_ks.duality_pairing(p_u_ks)
 
-                # points, coefs = self.local_merging(u_minus)
-                # u_ks = Measure(points, coefs)
-                # p_u_ks = self.p(u_ks)
-                # q_u_ks = self.g(u_ks.coefficients) - u_ks.duality_pairing(p_u_ks)
-                # epsilon_ks = epsilon + 0.5 * (self.j(u_ks) - self.j(u_minus)) / self.M
-                # points_plus, coefs_plus = self.newton_step(
-                #     points, coefs, damped, damping_root
-                # )
-                # u_ks_plus = Measure(points_plus, coefs_plus)
-                # u_hat_plus, epsilon_ks_plus, global_valid = self.lgcg_step(
-                #     p_u_ks, u_ks, epsilon_ks, q_u_ks
-                # )
-
-                # inner_lazy += int(global_valid)
-                # inner_total += 1
+                s += 1
                 times.append(time.time() - initial_time)
                 supports.append(len(u_ks.support))
                 inner_loop.append(1)
                 objective_values.append(self.j(u_ks))
                 epsilons.append(epsilon_ks)
                 logging.info(
-                    f"{k}, {s}: lazy: {global_valid}, support: {u_ks.support}, coefs: {u_ks.coefficients}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
+                    f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
                 )
+
+            if optimal:
+                u = u_ks * 1
+                break
 
             all_iterates = [u, u_lm, u_ks, u_ks_new, u_ks_gcg]
             iterate_values = [self.j(iterate) for iterate in all_iterates]
             choice_index = np.argmin(iterate_values)
             u = all_iterates[choice_index] * 1
 
-            # if not tol_ineq:
-            #     epsilon = epsilon_ks_plus
-
-            # # Regularity conditions
-            # ineq73, ineq75, ineq78, tol_ineq, M_ineq = (
-            #     self.get_regularity_inequalities(
-            #         points, coefs, points_plus, coefs_plus, epsilon_ks_plus, tol
-            #     )
-            # )
-
-            # logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}, {M_ineq}")
-            # while ineq73 and ineq75 and ineq78 and tol_ineq and M_ineq:
-            #     s += 1
-            #     points, coefs = points_plus.copy(), coefs_plus.copy()
-            #     u_ks = u_ks_plus * 1
-            #     p_u_ks = self.p(u_ks)
-            #     q_u_ks = self.g(u_ks.coefficients) - u_ks.duality_pairing(p_u_ks)
-            #     points_plus, coefs_plus = self.newton_step(
-            #         points, coefs, damped, damping_root
-            #     )
-            #     u_ks_plus = Measure(points_plus, coefs_plus)
-            #     if s % lgcg_frequency == 0:
-            #         epsilon_ks = epsilon_ks_plus
-            #         u_hat_plus, epsilon_ks_plus, global_valid = self.lgcg_step(
-            #             p_u_ks, u_ks, epsilon_ks, q_u_ks
-            #         )
-            #         inner_lazy += int(global_valid)
-            #         inner_total += 1
-            #     else:
-            #         global_valid = "N/A"
-            #     ineq73, ineq75, ineq78, tol_ineq, M_ineq = (
-            #         self.get_regularity_inequalities(
-            #             points, coefs, points_plus, coefs_plus, epsilon_ks_plus, tol
-            #         )
-            #     )
-            #     times.append(time.time() - initial_time)
-            #     supports.append(len(u_ks.support))
-            #     inner_loop.append(1)
-            #     objective_values.append(self.j(u_ks))
-            #     epsilons.append(epsilon_ks)
-            #     logging.info(
-            #         f"{k}, {s}: lazy: {global_valid}, support: {u_ks.support}, coefs: {u_ks.coefficients}, epsilon: {epsilon_ks_plus}, objective: {self.j(u_ks):.3E}"
-            #     )
-            #     logging.info(f"{ineq73}, {ineq75}, {ineq78}, {tol_ineq}, {M_ineq}")
-
-            # # Choose best iterate so far
-            # all_iterates = [u_minus, u_ks, u_ks_plus, u_hat_plus]
-            # iterate_values = [self.j(iterate) for iterate in all_iterates]
-            # choice_index = np.argmin(iterate_values)
-            # u_plus = all_iterates[choice_index] * 1
-            # if not tol_ineq:
-            #     epsilon = epsilon_ks_plus
-            # else:
-            #     choice_index = 0
-            #     u_plus = u_minus * 1
-
-            # if len(u_plus.coefficients):
-            #     u_dropped, dropped = self.drop_step(u_plus)
-            #     u = self.finite_dimensional_step(u_dropped, Psi_k)
-            #     dropped_tot += dropped
-            # else:
-            #     u = u_plus * 1
             p_u = self.p(u)
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
-            Psi_k = max(Psi_k / 2, self.machine_precision)
 
-            # u_minus, epsilon, global_valid = self.lgcg_step(p_u, u, epsilon, q_u)
-            # outer_lazy += int(global_valid)
-            # outer_total += 1
+            u_gcg, epsilon, global_valid = self.lgcg_step(p_u, u, epsilon, q_u)
+            lgcg_lazy += int(global_valid)
+            lgcg_total += 1
+
+            if len(u_gcg.coefficients):
+                u_drop, dropped = self.drop_step(u_gcg)
+                u_plus, finite_psi = self.finite_dimensional_step(
+                    u_drop, Psi_k, mode="positive"
+                )
+                dropped_tot += dropped
+            else:
+                u_plus = u_gcg * 1
+            self.M = self.j(u) / self.alpha
+
+            Psi_k = max(Psi_k / 2, self.machine_precision)
+            k += 1
 
             times.append(time.time() - initial_time)
             supports.append(len(u.support))
@@ -884,10 +803,10 @@ class LazifiedPDAP:
             objective_values.append(self.j(u))
             epsilons.append(epsilon)
             logging.info(
-                f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {u.support}, epsilon: {epsilon}, objective: {self.j(u):.3E}, dropped:{dropped}"
+                f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon}, objective: {self.j(u):.3E}, dropped: {dropped}"
             )
-            k += 1
 
+        self.M = self.j(self.u_0) / self.alpha
         return (
             u,
             times,
