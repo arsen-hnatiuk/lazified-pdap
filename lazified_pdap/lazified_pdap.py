@@ -723,7 +723,7 @@ class LazifiedPDAP:
                     logging.info(
                         f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
                     )
-                    logging.info(second_inequality)
+                    logging.info(f"Inequality 6.7: {second_inequality}")
                     break
 
                 first_inequalities = self.first_inequalities(
@@ -739,7 +739,7 @@ class LazifiedPDAP:
                     logging.info(
                         f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
                     )
-                    logging.info(first_inequalities)
+                    logging.info(f"Inequalities 6.6: {first_inequalities}")
                     break
 
                 if s + 1 % drop_frequency == 0:
