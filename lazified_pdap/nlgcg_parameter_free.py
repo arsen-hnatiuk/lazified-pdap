@@ -12,7 +12,7 @@ logging.basicConfig(
 )
 
 
-class LazifiedPDAP:
+class NLGCGParameterFree:
     def __init__(
         self,
         target: np.ndarray,
@@ -23,12 +23,12 @@ class LazifiedPDAP:
         grad_P: Callable,
         hess_P: Callable,
         norm_kappa: float,
-        norm_kappa1: float,
         grad_j: Callable,
         hess_j: Callable,
         alpha: float,
         Omega: np.ndarray,
         L: float,
+        global_search_resolution: int,
         projection: str = "box",  # box or sphere
         M: int = 1e6,
         random_grid_size: int = int(1e4),
@@ -43,7 +43,6 @@ class LazifiedPDAP:
         self.g = g
         self.L = L
         self.norm_kappa = norm_kappa
-        self.norm_kappa1 = norm_kappa1
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
         self.j_tilde = lambda pos, coef: self.f(Measure(pos, coef)) + self.g(coef)
@@ -51,7 +50,7 @@ class LazifiedPDAP:
         self.M = min(M, self.j(self.u_0) / self.alpha)  # Bound on the norm of iterates
         self.C = 4 * self.L * self.M**2 * self.norm_kappa**2
         self.projection = projection
-        self.global_search_resolution = 1000
+        self.global_search_resolution = global_search_resolution
         self.grad_j = grad_j
         self.hess_j = hess_j
         self.Psi_0 = 1e-3
@@ -206,7 +205,6 @@ class LazifiedPDAP:
         keep_indices = np.where(vals_signs == measure_signs)[0]
         P_vals_unsorted = np.abs(p_vals[keep_indices])
         sorting_indices = np.argsort(P_vals_unsorted)[::-1]
-        P_vals = P_vals_unsorted[sorting_indices]
         reduced_support = u.support[keep_indices][sorting_indices]
         reduced_coefficients = u.coefficients[keep_indices][sorting_indices]
 
@@ -218,36 +216,34 @@ class LazifiedPDAP:
             tentative_u = Measure(new_support, new_coefficients)
             tentative_j = self.j(tentative_u)
             if tentative_j <= true_j:
-                return tentative_u, True
+                if len(new_support) == len(u.support):
+                    return tentative_u, False
+                else:
+                    return tentative_u, True
         return u, False
 
-    def local_merging(self, u: Measure, radius: float) -> tuple:
+    def local_merging(self, u: Measure, radii: list) -> tuple:
         if not len(u.coefficients):
             return np.array([]), np.array([])
-
         p_u = self.p(u)
         p_norm = lambda x: np.abs(p_u(x))
         sorting_indices = np.argsort(p_norm(u.support))[::-1]
         full_set = u.support.copy()[sorting_indices]
-        merge_set = np.array([full_set[0]])
-        merge_coefs = [
-            np.sum(
-                u.coefficients[
-                    np.linalg.norm(u.support - full_set[0], axis=1) <= 2 * radius
-                ]
-            )
-        ]
-        for point in full_set[1:]:
-            if np.linalg.norm(point - merge_set, axis=1).min() > 2 * radius:
-                merge_set = np.vstack((merge_set, point))
-                merge_coefs.append(
-                    np.sum(
-                        u.coefficients[
-                            np.linalg.norm(u.support - point, axis=1) <= 2 * radius
-                        ]
-                    )
+        full_coefs = u.coefficients.copy()[sorting_indices]
+        full_radii = np.array(radii)[sorting_indices]
+        merged = np.array([False] * len(full_set), dtype=bool)
+        cluster_points = []
+        cluster_coefs = []
+        for i, point in enumerate(full_set):
+            if not merged[i]:
+                local_distances = np.linalg.norm(full_set[~merged] - point, axis=1)
+                cluster_indices = local_distances <= 2 * np.maximum(
+                    full_radii[~merged], full_radii[i]
                 )
-        return merge_set, np.array(merge_coefs)
+                cluster_points.append(point)
+                cluster_coefs.append(np.sum(full_coefs[~merged][cluster_indices]))
+                merged[~merged] |= cluster_indices
+        return np.array(cluster_points), np.array(cluster_coefs)
 
     def newton_step(
         self,
@@ -323,45 +319,57 @@ class LazifiedPDAP:
         eigenvalue = abs(np.max(np.linalg.eigvals(hess_j_z)))
         constant = 0.25 / eigenvalue
         j_tilde_diff = self.j_tilde(points_new, coefs_new) - self.j_tilde(points, coefs)
-        if constant <= -self.machine_precision:
+        if constant <= self.machine_precision:
             output_bools.append(False)
         else:
             output_bools.append(j_tilde_diff <= -constant * norm_grad**2)
 
+        if not output_bools[-1]:
+            logging.info(
+                f"norm_grad: {norm_grad}, constant: {constant}, diff: {j_tilde_diff}"
+            )
         return output_bools
 
     def second_inequality(
-        self, points: np.ndarray, coefs: np.ndarray, epsilon: float, radius: float
+        self, points: np.ndarray, coefs: np.ndarray, epsilon: float, radii: list
     ) -> bool:
         grad_j_z = self.grad_j(points, coefs)
-        grad_points = grad_j_z[: len(points)]
-        grad_coefs = grad_j_z[len(points) :]
+        points_part = 0
+        for i, radius in enumerate(radii):
+            points_part += radius * np.linalg.norm(
+                grad_j_z[i * len(points[0]) : (i + 1) * len(points[0])]
+            )
+        grad_coefs = grad_j_z[len(points.flatten()) :]
         gap = (
-            radius * np.linalg.norm(grad_points)
-            + self.M * min(0, np.min(np.multiply(grad_coefs, np.sign(coefs))))
+            points_part
+            + self.M * abs(min(0, np.min(np.multiply(grad_coefs, np.sign(coefs)))))
             + grad_coefs @ coefs
         )
         if self.M * epsilon <= self.C:
             ineq = gap >= self.M**2 * epsilon**2 / (2 * self.C)
         else:
             ineq = gap >= (2 * self.M * epsilon - self.C) / 2
+
+        if not ineq:
+            logging.info(f"gap: {gap}, norm grad: {np.linalg.norm(grad_j_z)}")
         return ineq
 
-    def compute_radius(self, u: Measure) -> float:
-        radius = 0
+    def compute_radii(self, u: Measure, max_radius: float) -> list:
+        radii = []
         grad_P = self.grad_P(u)
         hess_P = self.hess_P(u)
         for point in u.support:
             point_grad = grad_P(point)
             point_hess = hess_P(point)
-            eigenvalue = abs(np.min(np.linalg.eigvals(point_hess)))
-            tentative_radius = np.linalg.norm(point_grad) / eigenvalue
-            radius = max(radius, tentative_radius)
-        return radius
+            eigenvalue = np.min(np.abs(np.linalg.eigvals(point_hess)))
+            local_radius = 4 * np.linalg.norm(point_grad) / eigenvalue
+            radii.append(min(local_radius, max_radius))
+        return radii
 
-    def newton(
+    def nlgcg(
         self,
         tol: float,
+        max_radius: float,
         drop_frequency: int = 5,
         u_0: Measure = Measure(),
         Psi_0: float = 1,
@@ -384,8 +392,9 @@ class LazifiedPDAP:
         u_plus = u_0 * 1
         while 2 * self.M * epsilon > tol:
             u = u_plus * 1
-            radius = self.compute_radius(u)
-            points, coefs = self.local_merging(u, radius)
+            radii = self.compute_radii(u, max_radius)
+            logging.info(f"Radii: {radii}")
+            points, coefs = self.local_merging(u, radii)
             u_ks = Measure(points, coefs)
             local_M = self.j(u_ks) / self.alpha
             epsilon_ks = epsilon + 0.5 * (self.j(u_ks) - self.j(u)) / self.M
@@ -402,7 +411,7 @@ class LazifiedPDAP:
                 u_ks_new = Measure(points_new, coefs_new)
 
                 second_inequality = self.second_inequality(
-                    points, coefs, epsilon_ks, radius
+                    points, coefs, epsilon_ks, radii
                 )
                 if not second_inequality:
                     u_ks_gcg, epsilon_ks, global_valid = self.lgcg_step(
@@ -427,7 +436,7 @@ class LazifiedPDAP:
                 else:
                     optimal = False
                 second_inequality = self.second_inequality(
-                    points, coefs, epsilon_ks, radius
+                    points, coefs, epsilon_ks, radii
                 )
                 if not second_inequality:
                     s += 1
@@ -461,7 +470,7 @@ class LazifiedPDAP:
                 if (s + 1) % drop_frequency == 0:
                     u_ks_drop, dropped = self.drop_step(u_ks_new)
                     dropped_tot += dropped
-                    points, coefs = self.local_merging(u_ks_drop, radius)
+                    points, coefs = self.local_merging(u_ks_drop, radii)
                     u_ks = Measure(points, coefs)
                     epsilon_ks = (
                         epsilon_ks + 0.5 * (self.j(u_ks) - self.j(u_ks_drop)) / self.M
@@ -521,6 +530,7 @@ class LazifiedPDAP:
             logging.info(
                 f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon}, objective: {self.j(u):.3E}, dropped: {dropped}"
             )
+            logging.info("=====================================================")
 
         self.M = self.j(self.u_0) / self.alpha
         return (
