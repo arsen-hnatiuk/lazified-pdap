@@ -22,15 +22,14 @@ class NLGCGParameterFree:
         p: Callable,
         grad_P: Callable,
         hess_P: Callable,
-        norm_kappa: float,
         grad_j: Callable,
         hess_j: Callable,
         alpha: float,
         Omega: np.ndarray,
-        L: float,
         global_search_resolution: int,
         projection: str = "box",  # box or sphere
         M: int = 1e6,
+        C_0: float = 1,
         random_grid_size: int = int(1e4),
     ) -> None:
         self.target = target
@@ -41,14 +40,16 @@ class NLGCGParameterFree:
         self.hess_P = hess_P
         self.alpha = alpha
         self.g = g
-        self.L = L
-        self.norm_kappa = norm_kappa
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
         self.j_tilde = lambda pos, coef: self.f(Measure(pos, coef)) + self.g(coef)
         self.u_0 = Measure()
-        self.M = min(M, self.j(self.u_0) / self.alpha)  # Bound on the norm of iterates
-        self.C = 4 * self.L * self.M**2 * self.norm_kappa**2
+        self.M_0 = min(
+            M, self.j(self.u_0) / self.alpha
+        )  # Bound on the norm of iterates
+        self.M = self.M_0
+        self.C_0 = C_0
+        self.C_raw = self.C_0  # curvature constant without the M part
         self.projection = projection
         self.global_search_resolution = global_search_resolution
         self.grad_j = grad_j
@@ -282,14 +283,30 @@ class NLGCGParameterFree:
         return points_new, coefs_new
 
     def lgcg_step(self, p_u: Callable, u: Measure, epsilon: float, q_u: float) -> tuple:
+        j_initial = self.j(u)
+        condition = False
         x_k, global_valid = self.global_search(u, epsilon, q_u, p_u)
         Phi = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
-        eta = min(1, Phi / self.C)
         if Phi > q_u:
             v = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
         else:
             v = Measure()
-        u_plus = u * (1 - eta) + v * eta
+        self.C_raw /= 2
+        while not condition:
+            # Increase C_raw until it satisfies the descent condition
+            self.C_raw *= 2
+            Curv = self.C_raw * self.M**2
+            eta = min(1, Phi / Curv)
+            u_plus = u * (1 - eta) + v * eta
+            jdiff = self.j(u_plus) - j_initial
+            if Phi <= Curv:
+                expected_decrease = -0.5 * Phi**2 / Curv
+            else:
+                expected_decrease = 0.5 * Curv - Phi
+            if abs(expected_decrease) < self.machine_precision:
+                condition = True
+            else:
+                condition = jdiff <= expected_decrease
         if not global_valid:
             # We have a global maximum x_k
             epsilon = 0.5 * Phi / self.M
@@ -319,7 +336,10 @@ class NLGCGParameterFree:
         eigenvalue = abs(np.max(np.linalg.eigvals(hess_j_z)))
         constant = 0.25 / eigenvalue
         j_tilde_diff = self.j_tilde(points_new, coefs_new) - self.j_tilde(points, coefs)
-        if constant <= self.machine_precision:
+        if (
+            constant <= self.machine_precision
+            or abs(j_tilde_diff) <= self.machine_precision
+        ):
             output_bools.append(False)
         else:
             output_bools.append(j_tilde_diff <= -constant * norm_grad**2)
@@ -345,10 +365,10 @@ class NLGCGParameterFree:
             + self.M * abs(min(0, np.min(np.multiply(grad_coefs, np.sign(coefs)))))
             + grad_coefs @ coefs
         )
-        if self.M * epsilon <= self.C:
-            ineq = gap >= self.M**2 * epsilon**2 / (2 * self.C)
+        if epsilon <= self.C_raw * self.M:
+            ineq = gap >= 0.5 * epsilon**2 / self.C_raw
         else:
-            ineq = gap >= (2 * self.M * epsilon - self.C) / 2
+            ineq = gap >= (2 * self.M * epsilon - self.C_raw * self.M**2) / 2
 
         if not ineq:
             logging.info(f"gap: {gap}, norm grad: {np.linalg.norm(grad_j_z)}")
@@ -374,6 +394,8 @@ class NLGCGParameterFree:
         u_0: Measure = Measure(),
         Psi_0: float = 1,
     ) -> tuple:
+        self.M = self.M_0
+        self.C_raw = self.C_0
         epsilon = 0.5 * self.j(u_0) / self.M
         Psi_k = min(Psi_0, self.Psi_0)
         k = 0
@@ -532,7 +554,6 @@ class NLGCGParameterFree:
             )
             logging.info("=====================================================")
 
-        self.M = self.j(self.u_0) / self.alpha
         return (
             u,
             times,
