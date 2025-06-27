@@ -291,9 +291,11 @@ class NLGCGParameterFree:
             v = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
         else:
             v = Measure()
+        updates = 0
         self.C_raw /= 2
         while not condition:
             # Increase C_raw until it satisfies the descent condition
+            updates += 1
             self.C_raw *= 2
             Curv = self.C_raw * self.M**2
             eta = min(1, Phi / Curv)
@@ -307,9 +309,29 @@ class NLGCGParameterFree:
                 condition = True
             else:
                 condition = jdiff <= expected_decrease
+        if updates < 2:
+            # There has been no increase of the curvature constant, try a smaller value
+            while condition and self.C_raw >= self.C_0:
+                previous_u_plus = u_plus * 1
+                self.C_raw /= 2
+                Curv = self.C_raw * self.M**2
+                eta = min(1, Phi / Curv)
+                u_plus = u * (1 - eta) + v * eta
+                jdiff = self.j(u_plus) - j_initial
+                if Phi <= Curv:
+                    expected_decrease = -0.5 * Phi**2 / Curv
+                else:
+                    expected_decrease = 0.5 * Curv - Phi
+                if abs(expected_decrease) < self.machine_precision:
+                    condition = True
+                else:
+                    condition = jdiff <= expected_decrease
+            self.C_raw *= 2
+            u_plus = previous_u_plus * 1
         if not global_valid:
             # We have a global maximum x_k
             epsilon = 0.5 * Phi / self.M
+        logging.info(f"self.C_raw: {self.C_raw}")
         return u_plus, epsilon, global_valid
 
     def first_inequalities(
