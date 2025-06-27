@@ -28,7 +28,7 @@ class NLGCGParameterFree:
         Omega: np.ndarray,
         global_search_resolution: int,
         projection: str = "box",  # box or sphere
-        M: int = 1e6,
+        M: float = 1e6,
         C_0: float = 1,
         random_grid_size: int = int(1e4),
     ) -> None:
