@@ -30,6 +30,7 @@ class NLGCGParameterFree:
         projection: str = "box",  # box or sphere
         M: float = 1e6,
         C_0: float = 1,
+        dual_variable_goodness: float = 0.5,
         random_grid_size: int = int(1e4),
     ) -> None:
         self.target = target
@@ -41,6 +42,7 @@ class NLGCGParameterFree:
         self.alpha = alpha
         self.g = g
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
+        self.max_radius = 1
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
         self.j_tilde = lambda pos, coef: self.f(Measure(pos, coef)) + self.g(coef)
         self.u_0 = Measure()
@@ -59,6 +61,7 @@ class NLGCGParameterFree:
         self.stop_search = 5
         self.batching_constant = 2e8
         self.random_grid_size = random_grid_size
+        self.dual_variable_goodness = dual_variable_goodness
 
     def project_into_domain(self, x: np.ndarray) -> np.ndarray:
         # Project an array into domain, parallelized
@@ -104,7 +107,7 @@ class NLGCGParameterFree:
             return grid
 
     def global_search(
-        self, u: Measure, epsilon: float, q_u: float, p_u: Callable
+        self, u: Measure, epsilon: float, q_u: float, p_u: Callable, radius: float
     ) -> tuple:
         p_norm = lambda x: np.abs(p_u(x))
         grad_P = self.grad_P(u)
@@ -115,10 +118,10 @@ class NLGCGParameterFree:
         best_val = grid_vals[max_ind]
         best_point = grid[max_ind]
         phi_val = np.max(self.M * (best_val - self.alpha), 0) + q_u
-        if phi_val >= self.M * epsilon:
-            return grid[max_ind], True  # Found a desired point
+        # if phi_val >= self.M * epsilon:
+        #     return grid[max_ind], True  # Found a desired point
         point_steps = 0
-        while point_steps < self.stop_search:
+        while point_steps < self.stop_search and phi_val < self.M * epsilon:
             batching_factor = (
                 len(self.target) * self.Omega.shape[0] * (self.Omega.shape[0] + 1)
                 + 2 * self.Omega.shape[0]
@@ -126,6 +129,8 @@ class NLGCGParameterFree:
             )
             batch_size = int(self.batching_constant // batching_factor)
             for batch in gen_batches(len(grid), batch_size):
+                if phi_val >= self.M * epsilon:
+                    break
                 batch_points = grid[batch]
                 new_points = np.zeros(batch_points.shape)
                 gradients = grad_P(batch_points)
@@ -147,6 +152,8 @@ class NLGCGParameterFree:
                         new_points[i] = point + 0.1 * gradient
                 projected_new_points = self.project_into_domain(new_points).copy()
                 p_vals = p_norm(projected_new_points)
+                grid[batch] = projected_new_points
+                grid_vals[batch] = p_vals
                 max_ind = np.argmax(p_vals)
                 max_val = p_vals[max_ind]
                 if max_val > best_val:
@@ -154,9 +161,7 @@ class NLGCGParameterFree:
                     best_point = projected_new_points[max_ind]
                     phi_val = np.max(self.M * (best_val - self.alpha), 0) + q_u
                     if phi_val >= self.M * epsilon:
-                        return best_point, True  # Found a desired point
-                grid[batch] = projected_new_points
-                grid_vals[batch] = p_vals
+                        break
 
                 del new_points
                 del projected_new_points
@@ -166,10 +171,37 @@ class NLGCGParameterFree:
 
             point_steps += 1
 
+        if phi_val >= self.M * epsilon:
+            success = True  # Found a desired point
+        else:
+            success = False
+        valid_indices = np.where(
+            np.logical_and(
+                grid_vals >= self.alpha,
+                grid_vals > best_val * self.dual_variable_goodness,
+            )
+        )[0]
+        valid_grid = grid[valid_indices]
+        valid_grid_vals = grid_vals[valid_indices]
+        order_indices = np.argsort(valid_grid_vals)[::-1]
+        order_grid = valid_grid[order_indices]
+
+        if not len(order_grid):
+            found_points = np.array([best_point])
+        else:
+            found_points = np.array([order_grid[0]])
+        for point in order_grid[1:]:
+            local_distances = np.linalg.norm(found_points - point, axis=1)
+            if np.all(local_distances > 2 * radius):
+                found_points = np.vstack((found_points, point))
+        found_values = p_u(found_points)
+
         return (
             best_point,
-            False,
-        )  # Found the global maximum, but it does not satisfy the condition
+            found_points,
+            found_values,
+            success,
+        )
 
     def finite_dimensional_step(
         self, u: Measure, Psi: float, mode: str = "unconstrained"
@@ -282,13 +314,22 @@ class NLGCGParameterFree:
             points_new = self.project_into_domain(points_new)
         return points_new, coefs_new
 
-    def lgcg_step(self, p_u: Callable, u: Measure, epsilon: float, q_u: float) -> tuple:
+    def lgcg_step(
+        self, p_u: Callable, u: Measure, epsilon: float, q_u: float, radii: np.ndarray
+    ) -> tuple:
         j_initial = self.j(u)
         condition = False
-        x_k, global_valid = self.global_search(u, epsilon, q_u, p_u)
+        if len(radii):
+            radius = np.max(radii)
+        else:
+            radius = self.max_radius
+        x_k, found_points, found_values, global_valid = self.global_search(
+            u, epsilon, q_u, p_u, radius
+        )
         Phi = self.M * max((np.abs(p_u(x_k))[0] - self.alpha), 0) + q_u
         if Phi > q_u:
-            v = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
+            v = Measure(found_points, self.M * np.sign(found_values))
+            # v = Measure([x_k], [self.M * np.sign(p_u(x_k)[0])])
         else:
             v = Measure()
         updates = 0
@@ -331,7 +372,6 @@ class NLGCGParameterFree:
         if not global_valid:
             # We have a global maximum x_k
             epsilon = 0.5 * Phi / self.M
-        logging.info(f"self.C_raw: {self.C_raw}")
         return u_plus, epsilon, global_valid
 
     def first_inequalities(
@@ -349,13 +389,14 @@ class NLGCGParameterFree:
         output_bools.append(projection_distance == 0)
 
         # M test
-        output_bools.append(np.linalg.norm(coefs_new, ord=1) <= self.M)
+        output_bools.append(np.linalg.norm(coefs_new, ord=1) <= 2 * self.M)
 
         # Descent test
         grad_j_z = self.grad_j(points, coefs)
         norm_grad = np.linalg.norm(grad_j_z)
         hess_j_z = self.hess_j(points, coefs)
-        eigenvalue = abs(np.max(np.linalg.eigvals(hess_j_z)))
+        eivals = np.linalg.eigvals(hess_j_z)
+        eigenvalue = abs(np.max(eivals))
         constant = 0.25 / eigenvalue
         j_tilde_diff = self.j_tilde(points_new, coefs_new) - self.j_tilde(points, coefs)
         if (
@@ -368,7 +409,7 @@ class NLGCGParameterFree:
 
         if not output_bools[-1]:
             logging.info(
-                f"norm_grad: {norm_grad}, constant: {constant}, diff: {j_tilde_diff}"
+                f"norm_grad: {norm_grad}, constant: {constant}, diff: {j_tilde_diff}, smallest eival: {np.min(eivals):.3E}, largest eival: {np.max(eivals):.3E}"
             )
         return output_bools
 
@@ -396,16 +437,18 @@ class NLGCGParameterFree:
             logging.info(f"gap: {gap}, norm grad: {np.linalg.norm(grad_j_z)}")
         return ineq
 
-    def compute_radii(self, u: Measure, max_radius: float) -> list:
+    def compute_radii(self, u: Measure) -> list:
         radii = []
+        if not len(u.coefficients):
+            return radii
         grad_P = self.grad_P(u)
         hess_P = self.hess_P(u)
-        for point in u.support:
-            point_grad = grad_P(point)
-            point_hess = hess_P(point)
+        grads = grad_P(u.support)
+        hesses = hess_P(u.support)
+        for point_grad, point_hess in zip(grads, hesses):
             eigenvalue = np.min(np.abs(np.linalg.eigvals(point_hess)))
             local_radius = 4 * np.linalg.norm(point_grad) / eigenvalue
-            radii.append(min(local_radius, max_radius))
+            radii.append(min(local_radius, self.max_radius))
         return radii
 
     def nlgcg(
@@ -416,6 +459,7 @@ class NLGCGParameterFree:
         u_0: Measure = Measure(),
         Psi_0: float = 1,
     ) -> tuple:
+        self.max_radius = max_radius
         self.M = self.M_0
         self.C_raw = self.C_0
         epsilon = 0.5 * self.j(u_0) / self.M
@@ -435,8 +479,9 @@ class NLGCGParameterFree:
 
         u_plus = u_0 * 1
         while 2 * self.M * epsilon > tol:
+            global_valid = "N/A"
             u = u_plus * 1
-            radii = self.compute_radii(u, max_radius)
+            radii = self.compute_radii(u)
             logging.info(f"Radii: {radii}")
             points, coefs = self.local_merging(u, radii)
             u_ks = Measure(points, coefs)
@@ -448,18 +493,29 @@ class NLGCGParameterFree:
             u_ks_new = u_ks * 1
             u_lm = u_ks * 1
 
-            s = 0
+            s = 1
             while len(u_ks.coefficients):
                 # Inner loop
                 points_new, coefs_new = self.newton_step(points, coefs)
                 u_ks_new = Measure(points_new, coefs_new)
 
+                # Monitor statistics
+                times.append(time.time() - initial_time)
+                supports.append(len(u_ks.support))
+                inner_loop.append(1)
+                objective_values.append(self.j(u_ks))
+                epsilons.append(epsilon_ks)
+                logging.info(
+                    f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, c_raw: {self.C_raw} objective: {self.j(u_ks):.6E}"
+                )
+
+                # Check validity of the newton step
                 second_inequality = self.second_inequality(
                     points, coefs, epsilon_ks, radii
                 )
                 if not second_inequality:
                     u_ks_gcg, epsilon_ks, global_valid = self.lgcg_step(
-                        p_u_ks, u_ks, epsilon_ks, q_u_ks
+                        p_u_ks, u_ks, epsilon_ks, q_u_ks, radii
                     )
                     lgcg_lazy += int(global_valid)
                     lgcg_total += 1
@@ -468,14 +524,6 @@ class NLGCGParameterFree:
                 if 2 * local_M * epsilon_ks <= tol:  # Optimality reached
                     optimal = True
                     s += 1
-                    times.append(time.time() - initial_time)
-                    supports.append(len(u_ks.support))
-                    inner_loop.append(1)
-                    objective_values.append(self.j(u_ks))
-                    epsilons.append(epsilon_ks)
-                    logging.info(
-                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
-                    )
                     break
                 else:
                     optimal = False
@@ -484,33 +532,17 @@ class NLGCGParameterFree:
                 )
                 if not second_inequality:
                     s += 1
-                    times.append(time.time() - initial_time)
-                    supports.append(len(u_ks_new.support))
-                    inner_loop.append(1)
-                    objective_values.append(self.j(u_ks_new))
-                    epsilons.append(epsilon_ks)
-                    logging.info(
-                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
-                    )
                     logging.info(f"Inequality 6.7: {second_inequality}")
                     break
-
                 first_inequalities = self.first_inequalities(
                     points, coefs, points_new, coefs_new
                 )
                 if not all(first_inequalities):
                     s += 1
-                    times.append(time.time() - initial_time)
-                    supports.append(len(u_ks_new.support))
-                    inner_loop.append(1)
-                    objective_values.append(self.j(u_ks_new))
-                    epsilons.append(epsilon_ks)
-                    logging.info(
-                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
-                    )
                     logging.info(f"Inequalities 6.6: {first_inequalities}")
                     break
 
+                # Perform drop and local merging
                 if (s + 1) % drop_frequency == 0:
                     u_ks_drop, dropped = self.drop_step(u_ks_new)
                     dropped_tot += dropped
@@ -526,16 +558,7 @@ class NLGCGParameterFree:
                 local_M = self.j(u_ks) / self.alpha
                 p_u_ks = self.p(u_ks)
                 q_u_ks = self.g(u_ks.coefficients) - u_ks.duality_pairing(p_u_ks)
-
                 s += 1
-                times.append(time.time() - initial_time)
-                supports.append(len(u_ks.support))
-                inner_loop.append(1)
-                objective_values.append(self.j(u_ks))
-                epsilons.append(epsilon_ks)
-                logging.info(
-                    f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
-                )
 
             if optimal:
                 u = u_ks * 1
@@ -549,22 +572,20 @@ class NLGCGParameterFree:
             p_u = self.p(u)
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
 
-            u_gcg, epsilon, global_valid = self.lgcg_step(p_u, u, epsilon, q_u)
+            u_gcg, epsilon, global_valid = self.lgcg_step(p_u, u, epsilon, q_u, radii)
             lgcg_lazy += int(global_valid)
             lgcg_total += 1
 
             if len(u_gcg.coefficients):
                 u_drop, dropped = self.drop_step(u_gcg)
                 u_plus, finite_psi = self.finite_dimensional_step(
-                    u_drop, Psi_k, mode="positive"
+                    u_drop, self.machine_precision, mode="positive"
                 )
                 dropped_tot += dropped
             else:
                 u_plus = u_gcg * 1
             self.M = self.j(u) / self.alpha
-
             Psi_k = max(Psi_k / 2, self.machine_precision)
-            k += 1
 
             times.append(time.time() - initial_time)
             supports.append(len(u.support))
@@ -572,9 +593,12 @@ class NLGCGParameterFree:
             objective_values.append(self.j(u))
             epsilons.append(epsilon)
             logging.info(
-                f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon}, objective: {self.j(u):.3E}, dropped: {dropped}"
+                f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon}, c_raw: {self.C_raw}, objective: {self.j(u):.6E}"
             )
-            logging.info("=====================================================")
+            logging.info(
+                "============================================================================================="
+            )
+            k += 1
 
         return (
             u,

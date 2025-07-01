@@ -99,7 +99,13 @@ class SSN:
                 qdiff = self.j(prox_qnew) - self.j(prox_q)
                 while qdiff >= tol:
                     theta = 2 * theta
-                    direction = np.linalg.solve(left_hand + theta * Id, right_hand)
+                    try:
+                        direction = np.linalg.solve(left_hand + theta * Id, right_hand)
+                    except np.linalg.LinAlgError:
+                        logging.debug(
+                            f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: LINEAR SYSTEM NOT SOLVABLE, {self.Psi(prox_q):.3E} achieved"
+                        )
+                        return prox_q
                     qnew = q - direction
                     prox_qnew = self.prox(qnew, self.alpha)
                     qdiff = self.j(prox_qnew) - self.j(prox_q)
@@ -109,7 +115,7 @@ class SSN:
                 k += 1
                 if k > 1000:
                     logging.debug(
-                        f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: MAX ITERATIONS REACHED"
+                        f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: MAX ITERATIONS REACHED, {self.Psi(prox_q):.3E} achieved"
                     )
                     return prox_q
             last_tol = tol
