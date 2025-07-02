@@ -19,18 +19,13 @@ class Measure:
             self.coefficients
         ), "The support and coefficients must have the same length"
 
-    def add_zero_support(self, support_plus: np.ndarray) -> None:
+    def add_zero_support(self, support_plus: np.ndarray, checked: bool = False) -> None:
         # Given an array of points, add them to the support with coefficient 0
         for point in support_plus:
             if len(self.support.shape) == 1:  # No support
                 self.support = np.array([point])
                 self.coefficients = np.append(self.coefficients, 0)
-            elif all(
-                [
-                    not np.array_equal(point, support_point)
-                    for support_point in self.support
-                ]
-            ):
+            elif checked or not np.any(self.support == point, axis=1):
                 self.support = np.vstack([self.support, point])
                 self.coefficients = np.append(self.coefficients, 0)
 
@@ -50,32 +45,37 @@ class Measure:
             result = values @ self.coefficients
         return result
 
-    def __add__(self, other):
+    def __add__(self, other: "Measure") -> "Measure":
         # Add two measures
+        if not isinstance(other, Measure):
+            return NotImplemented
+        if not len(self.support):
+            return other
+        if not len(other.support):
+            return self
         new = Measure(
             support=self.support.copy(), coefficients=self.coefficients.copy()
         )
         for x, c in zip(other.support, other.coefficients):
             changed = False
-            for i, pos in enumerate(new.support):
-                if np.array_equal(pos, x):
-                    new.coefficients[i] += c
-                    changed = True
-                    break
-            # new support point
+            matches = np.all(new.support == x, axis=1)
+            if np.any(matches):
+                idx = np.where(matches)[0][0]
+                new.coefficients[idx] += c
+                changed = True
             if not changed:
-                new.add_zero_support(np.array([x]))
+                new.add_zero_support(np.array([x]), checked=True)
                 new.coefficients[-1] = c
         return new
 
-    def __mul__(self, other):
+    def __mul__(self, other: float) -> "Measure":
         # Multiply a measure by a scalar
         new = Measure(
             support=self.support.copy(), coefficients=self.coefficients.copy() * other
         )
         return new
 
-    def __str__(self):
+    def __str__(self) -> str:
         return (
             f"Measure with support {self.support} and coefficients {self.coefficients}"
         )
