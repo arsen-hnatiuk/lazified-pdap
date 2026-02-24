@@ -16,7 +16,7 @@ class LazifiedPDAP:
     def __init__(
         self,
         target: np.ndarray,
-        kappa: Callable,
+        kernel: Callable,
         g: Callable,
         f: Callable,
         p: Callable,
@@ -41,7 +41,7 @@ class LazifiedPDAP:
         random_grid_size: int = int(1e4),
     ) -> None:
         self.target = target
-        self.kappa = kappa
+        self.kernel = kernel
         self.f = f
         self.p = p
         self.grad_P = grad_P
@@ -303,7 +303,7 @@ class LazifiedPDAP:
     ) -> tuple:
         if not len(u.coefficients):
             return u, Psi * 2
-        K_support = self.kappa(u.support).T
+        K_support = self.kernel(u.support).T
         if mode == "positive":
             signs = np.sign(u.coefficients)
             K_support = np.multiply(K_support, signs)
@@ -347,6 +347,7 @@ class LazifiedPDAP:
 
     def lpdap(self, tol: float, u_0: Measure = Measure(), Psi_0: float = 1) -> tuple:
         u = u_0 * 1
+        intermediate_u = u * 1
         p_u = self.p(u)
         q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
         u_plus = u_0 * 1
@@ -372,6 +373,8 @@ class LazifiedPDAP:
         objective_values = []
         steps = []
         while Phi_k > tol:
+            if k == 30:
+                intermediate_u = u * 1
             if len(u_plus.coefficients):
                 # Low-dimensional step
                 u_dropped, dropped = self.drop_step(u_plus)
@@ -472,7 +475,16 @@ class LazifiedPDAP:
             logging.info("==============================================")
             k += 1
         self.M = self.j(self.u_0) / self.alpha
-        return u, Phi_ks, times, supports, objective_values, dropped_tot, epsilons
+        return (
+            u,
+            intermediate_u,
+            Phi_ks,
+            times,
+            supports,
+            objective_values,
+            dropped_tot,
+            epsilons,
+        )
 
     def pdap(self, tol: float, u_0: Measure = Measure()) -> tuple:
         k = 1
