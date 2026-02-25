@@ -11,6 +11,9 @@ src_path = (module_path / "src").resolve()
 if src_path not in sys.path:
     sys.path.append(str(src_path))
 from lib.measure import Measure
+from lib.fista import FISTA
+from lib.ssn import SSN
+from lib.cvxpy_solver import CVXPY
 from lazified_pdap import LazifiedPDAP
 
 results_dir = Path("results/signal_processing")
@@ -80,6 +83,7 @@ target = u_hat.duality_pairing(kernel)
 
 g = lambda u: alpha * np.linalg.norm(u, ord=1)
 f = lambda u: 0.5 * np.linalg.norm(u.duality_pairing(kernel) - target) ** 2
+j = lambda u: f(u) + g(u)
 
 
 def p(u):
@@ -193,6 +197,50 @@ def compute_intervals(inner_loop):
         end = len(inner_loop) - 0.5
         intervals.append((start, end))
     return np.array(intervals)
+
+
+def get_grid(size: int) -> np.ndarray:
+    grid = (
+        np.array(
+            np.meshgrid(
+                *(np.linspace(bound[0], bound[1], size + 1)[1:] for bound in Omega)
+            )
+        )
+        .reshape(len(Omega), -1)
+        .T
+    )
+    return grid
+
+
+def test():
+    size = 1000
+    grid = get_grid(size)
+    K = kernel(grid).T
+    u_0 = np.zeros(K.shape[1])
+    j = lambda u: 0.5 * np.linalg.norm(K @ u - target) ** 2 + alpha * np.linalg.norm(
+        u, ord=1
+    )
+    M = j(u_0) / alpha
+
+    logging.info(f"Solving with SSN on uniform grid of size {size}")
+    ssn_exp = SSN(K=K, alpha=alpha, target=target, M=M, mode="unconstrained")
+    u_ssn, objectives_ssn, times_ssn = ssn_exp.solve_experiment(tol=1e-10)
+    obj_ssn = j(u_ssn)
+    logging.info(objectives_ssn)
+    logging.info(times_ssn)
+
+    logging.info(f"Solving with CVXPY on uniform grid of size {size}")
+    cvxpy_exp = CVXPY(K=K, alpha=alpha, target=target)
+    u_cvxpy, objectives_cvxpy, times_cvxpy = cvxpy_exp.solve_experiment(tol=1e-10)
+    obj_cvxpy = j(u_cvxpy)
+    logging.info(objectives_cvxpy)
+    logging.info(times_cvxpy)
+
+    logging.info(f"Solving with FISTA on uniform grid of size {size}")
+    fista_exp = FISTA(K=K, alpha=alpha, target=target)
+    u_fista, objectives_fista, times_fista = fista_exp.solve(max_iter=100000)
+    obj_fista = j(u_fista)
+    logging.info(obj_fista)
 
 
 def experiment():
@@ -401,4 +449,5 @@ def experiment():
 
 
 if __name__ == "__main__":
-    experiment()
+    test()
+    # experiment()

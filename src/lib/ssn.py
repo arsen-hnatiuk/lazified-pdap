@@ -1,6 +1,5 @@
-# An implementation of the semismooth Newton method following Section 3 of https://mediatum.ub.tum.de/doc/1241413/1241413.pdf
-
 import numpy as np
+import time
 import logging
 from lib.default_values import *
 
@@ -121,6 +120,19 @@ class SSN:
             f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
         )
         return prox_q
+
+    def solve_experiment(self, tol: float):
+        time_0 = time.time()
+        u = np.zeros(self.K.shape[1])
+        times = [time.time() - time_0]
+        objectives = [self.j(u)]
+        k = 0
+        while 10**k >= tol - self.machine_precision:
+            u = self.solve(tol=10**k, u_0=u)
+            k -= 1
+            times.append(time.time() - time_0)
+            objectives.append(self.j(u))
+        return u, objectives, times
 
 
 # if __name__ == "__main__":
