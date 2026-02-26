@@ -15,7 +15,6 @@ class SSN:
         alpha: float,
         target: np.ndarray,
         M: float,
-        minimum_iterations: int = 0,
         mode: str = "unconstrained",
         # mode: "unconstrained" for unconstrained, else for positive solutions
     ) -> None:
@@ -30,7 +29,7 @@ class SSN:
             self.hessian = get_default_hessian(self.K)
             self.j = lambda u: self.f(u) + self.g(u)
             self.M = M
-            self.minimum_iterations = minimum_iterations
+            self.maximum_iterations = 1000
             if mode == "unconstrained":
                 self.Psi = self.Psi_unconstrained
                 self.prox = self.prox_unconstrained
@@ -54,25 +53,25 @@ class SSN:
         variable_part = max(0, self.M * (np.max(p) - self.alpha))
         return constant_part + variable_part
 
-    def prox_unconstrained(self, q: np.ndarray, alpha: float) -> np.ndarray:
+    def prox_unconstrained(self, q: np.ndarray) -> np.ndarray:
         to_return = np.zeros(q.shape)
         for i, val in enumerate(q):
-            if np.abs(val) > alpha:
-                to_return[i] = val - alpha * np.sign(val)
+            if np.abs(val) > self.alpha:
+                to_return[i] = val - self.alpha * np.sign(val)
         return to_return
 
-    def prox_positive(self, q: np.ndarray, alpha: float) -> np.ndarray:
+    def prox_positive(self, q: np.ndarray) -> np.ndarray:
         to_return = np.zeros(q.shape)
         for i, val in enumerate(q):
-            if val > alpha:
-                to_return[i] = val - alpha
+            if val > self.alpha:
+                to_return[i] = val - self.alpha
         return to_return
 
-    def grad_prox_unconstrained(self, q: np.ndarray, alpha: float) -> np.ndarray:
-        return np.diag(np.where(np.abs(q) > alpha, 1, 0))
+    def grad_prox_unconstrained(self, q: np.ndarray) -> np.ndarray:
+        return np.diag(np.where(np.abs(q) > self.alpha, 1, 0))
 
-    def grad_prox_positive(self, q: np.ndarray, alpha: float) -> np.ndarray:
-        return np.diag(np.where(q > alpha, 1, 0))
+    def grad_prox_positive(self, q: np.ndarray) -> np.ndarray:
+        return np.diag(np.where(q > self.alpha, 1, 0))
 
     def solve(self, tol: float, u_0: np.ndarray) -> np.ndarray:
         # Semismooth Newton method (globalized via line search)
@@ -82,44 +81,51 @@ class SSN:
         theta = tol  # Set initial value for the step length parameter
         Id = np.identity(len(u_0))
         initial_j = self.j(u_0)
-        q = u_0 + self.p(u_0)
-        prox_q = self.prox(q, self.alpha)  # The actual iterate
+        q = u_0  # + self.p(u_0)
+        prox_q = self.prox(q)  # The actual iterate
+        psi_val = min(self.Psi(prox_q), self.Psi(q))
         k = 0
-        while k - 1 < self.minimum_iterations:
-            while self.Psi(prox_q) > tol or self.j(prox_q) > initial_j:
-                right_hand = q - prox_q - self.p(prox_q)
-                left_hand = Id + (self.hessian - Id) @ self.grad_prox(q, self.alpha)
-                theta = theta / 10
-                direction = np.linalg.solve(left_hand + theta * Id, right_hand)
-                qnew = q - direction
-                prox_qnew = self.prox(qnew, self.alpha)
-
-                # Backtracking line search
-                qdiff = self.j(prox_qnew) - self.j(prox_q)
-                while qdiff >= tol:
-                    theta = 2 * theta
-                    direction = np.linalg.solve(left_hand + theta * Id, right_hand)
-                    qnew = q - direction
-                    prox_qnew = self.prox(qnew, self.alpha)
-                    qdiff = self.j(prox_qnew) - self.j(prox_q)
-
-                q = qnew
-                prox_q = prox_qnew
-                k += 1
-                if k > 1000:
-                    logging.debug(
-                        f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: MAX ITERATIONS REACHED"
-                    )
+        while psi_val > tol:
+            if k > self.maximum_iterations:
+                logging.info(
+                    f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: MAX ITERATIONS REACHED, {psi_val:.3E} achieved"
+                )
+                if self.j(prox_q) <= initial_j:
                     return prox_q
-            last_tol = tol
-            tol = max(tol / 2, self.machine_precision)
+                else:
+                    return u_0
+            right_hand = q - prox_q - self.p(prox_q)
+            left_hand = Id + (self.hessian - Id) @ self.grad_prox(q)
+            theta = theta / 10
+            qdiff = tol + 1
+            while qdiff >= tol:
+                theta = 2 * theta
+                try:
+                    direction = np.linalg.solve(left_hand + theta * Id, right_hand)
+                except np.linalg.LinAlgError:
+                    logging.info(
+                        f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: LINEAR SYSTEM NOT SOLVABLE, {psi_val:.3E} achieved"
+                    )
+                    if self.j(prox_q) <= initial_j:
+                        return prox_q
+                    else:
+                        return u_0
+                qnew = q - direction
+                prox_qnew = self.prox(qnew)
+                qdiff = self.j(prox_qnew) - self.j(prox_q)
+            q = qnew
+            prox_q = prox_qnew
+            self.M = float(min(self.M, self.j(prox_q) / self.alpha))
+            psi_val = self.Psi(prox_q)
             k += 1
-        tol = last_tol
 
-        logging.debug(
+        logging.info(
             f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
         )
-        return prox_q
+        if self.j(prox_q) <= initial_j:
+            return prox_q
+        else:
+            return u_0
 
     def solve_experiment(self, tol: float):
         time_0 = time.time()

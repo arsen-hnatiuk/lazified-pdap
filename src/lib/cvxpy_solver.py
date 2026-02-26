@@ -29,10 +29,9 @@ class CVXPY:
         u = cp.Variable(self.K.shape[1])
         u.value = u_0
         obj = cp.Minimize(
-            0.5 * cp.sum_squares(self.K @ u - self.target) + self.alpha * cp.norm(u, 1)
+            0.5 * cp.sum_squares(self.K @ u - self.target) + self.alpha * cp.norm1(u)
         )
-        constraints = []
-        problem = cp.Problem(obj, constraints)
+        problem = cp.Problem(obj)
         problem.solve(solver=cp.SCS, eps=tol)
         logging.debug(
             f"CVXPY in {self.K.shape[1]} dimensions converged to tolerance {tol:.3E}"

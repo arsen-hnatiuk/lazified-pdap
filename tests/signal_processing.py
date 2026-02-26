@@ -1,6 +1,7 @@
 import numpy as np
 import sys
 import logging
+import time
 import matplotlib.pyplot as plt
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from lib.measure import Measure
 from lib.fista import FISTA
 from lib.ssn import SSN
 from lib.cvxpy_solver import CVXPY
+from lib.sklearn_solver import SKLEARN
+from lazified_pdap_finite import LazifiedPDAPFinite
 from lazified_pdap import LazifiedPDAP
 
 results_dir = Path("results/signal_processing")
@@ -23,6 +26,7 @@ results_dir.mkdir(parents=True, exist_ok=True)
 
 observation_resolution = 120
 Omega = np.array([[0.0, observation_resolution // 2]])
+Omega_size = Omega[0][1] - Omega[0][0]
 alpha = 1e-1
 true_sources = np.array([[3.125], [7], [np.sqrt(179)]])
 true_weights = np.array([-1, 0.7, 0.5])
@@ -213,7 +217,7 @@ def get_grid(size: int) -> np.ndarray:
 
 
 def test():
-    size = 1000
+    size = 10000
     grid = get_grid(size)
     K = kernel(grid).T
     u_0 = np.zeros(K.shape[1])
@@ -222,25 +226,40 @@ def test():
     )
     M = j(u_0) / alpha
 
-    logging.info(f"Solving with SSN on uniform grid of size {size}")
-    ssn_exp = SSN(K=K, alpha=alpha, target=target, M=M, mode="unconstrained")
-    u_ssn, objectives_ssn, times_ssn = ssn_exp.solve_experiment(tol=1e-10)
-    obj_ssn = j(u_ssn)
-    logging.info(objectives_ssn)
-    logging.info(times_ssn)
+    # logging.info(f"Solving with SSN on uniform grid of size {size}")
+    # ssn_exp = SSN(K=K, alpha=alpha, target=target, M=M, mode="unconstrained")
+    # u_ssn, objectives_ssn, times_ssn = ssn_exp.solve_experiment(tol=1e-10)
+    # obj_ssn = j(u_ssn)
+    # logging.info(objectives_ssn)
+    # logging.info(times_ssn)
 
-    logging.info(f"Solving with CVXPY on uniform grid of size {size}")
-    cvxpy_exp = CVXPY(K=K, alpha=alpha, target=target)
-    u_cvxpy, objectives_cvxpy, times_cvxpy = cvxpy_exp.solve_experiment(tol=1e-10)
-    obj_cvxpy = j(u_cvxpy)
-    logging.info(objectives_cvxpy)
-    logging.info(times_cvxpy)
+    # logging.info(f"Solving with CVXPY on uniform grid of size {size}")
+    # cvxpy_exp = CVXPY(K=K, alpha=alpha, target=target)
+    # u_cvxpy, objectives_cvxpy, times_cvxpy = cvxpy_exp.solve_experiment(tol=1e-10)
+    # obj_cvxpy = j(u_cvxpy)
+    # logging.info(objectives_cvxpy)
+    # logging.info(times_cvxpy)
 
-    logging.info(f"Solving with FISTA on uniform grid of size {size}")
-    fista_exp = FISTA(K=K, alpha=alpha, target=target)
-    u_fista, objectives_fista, times_fista = fista_exp.solve(max_iter=100000)
-    obj_fista = j(u_fista)
-    logging.info(obj_fista)
+    logging.info(f"Solving with scikit-learn on uniform grid of size {size}")
+    sklearn_exp = SKLEARN(K=K, alpha=alpha, target=target)
+    u_sklearn, objectives_sklearn, times_sklearn = sklearn_exp.solve_experiment(
+        tol=1e-10
+    )
+    obj_sklearn = j(u_sklearn)
+    logging.info(objectives_sklearn)
+    logging.info(times_sklearn)
+
+    logging.info(f"Solving with scikit-learn on uniform grid of size {size}")
+    sklearn_exp = SKLEARN(K=K, alpha=alpha, target=target)
+    u_sklearn = sklearn_exp.solve()
+    obj_sklearn = j(u_sklearn)
+    logging.info(obj_sklearn)
+
+    # logging.info(f"Solving with FISTA on uniform grid of size {size}")
+    # fista_exp = FISTA(K=K, alpha=alpha, target=target)
+    # u_fista, objectives_fista, times_fista = fista_exp.solve(max_iter=100000)
+    # obj_fista = j(u_fista)
+    # logging.info(obj_fista)
 
 
 def experiment():
@@ -271,7 +290,7 @@ def experiment():
     # PDAP
     logging.info(f"Computing PDAP solution")
     u_pdap, P_values_pdap, times_pdap, supports_pdap, objective_values_pdap = exp.pdap(
-        tol=1e-14
+        tol=1e-12
     )
     logging.info("-------------------------------------------------------------------")
 
@@ -305,12 +324,55 @@ def experiment():
         dropped_tot_lpdap,
         epsilons_lpdap,
     ) = exp.lpdap(tol=1e-12)
+    logging.info("-------------------------------------------------------------------")
 
-    optimum = objective_values_pdap[-1]
+    sklearn_solutions = {}
+    pdap_solutions = {}
+    sizes = [100, 1000, 10000, 100000]
+    for size in sizes:
+        grid = get_grid(size)
+        K_transpose = kernel(grid)
+
+        logging.info(f"Solving with scikit-learn on uniform grid of size {size}")
+        sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
+        u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve()
+        sklearn_solutions[size] = (u_sklearn, objective_value_sklearn, time_sklearn)
+
+        logging.info(f"Solving with PDAP on uniform grid of size {size}")
+        pdap_exp = LazifiedPDAPFinite(
+            K_transpose=K_transpose, alpha=alpha, target=target
+        )
+        u_pdap, objective_value_pdap, time_pdap = pdap_exp.solve(tol=1e-10)
+        pdap_solutions[size] = (u_pdap, objective_value_pdap, time_pdap)
+    logging.info("-------------------------------------------------------------------")
+
+    optimum = (
+        min(
+            [
+                objective_values_pdap[-1],
+                objective_values_lpdap[-1],
+                objective_values_nlgcg[-1],
+            ]
+        )
+        - 1e-14
+    )
     residuals_pdap = objective_values_pdap - optimum
     residuals_nlgcg = objective_values_nlgcg - optimum
     residuals_lpdap = objective_values_lpdap - optimum
-    logging.info("-------------------------------------------------------------------")
+    times_sklearn = [times for _, _, times in sklearn_solutions.values()]
+    objectives_sklearn = [objective for _, objective, _ in sklearn_solutions.values()]
+    times_pdap_grid = [times for _, _, times in pdap_solutions.values()]
+    objectives_pdap_grid = [objective for _, objective, _ in pdap_solutions.values()]
+
+    for size in sizes:
+        u_sklearn, objective_value_sklearn, time_sklearn = sklearn_solutions[size]
+        logging.info(
+            f"Scikit-learn on grid of size {size}: objective value {objective_value_sklearn:.12E}, time {time_sklearn:.3f}s"
+        )
+        u_pdap, objective_value_pdap, time_pdap = pdap_solutions[size]
+        logging.info(
+            f"PDAP on grid of size {size}: objective value {objective_value_pdap:.12E}, time {time_pdap:.3f}s"
+        )
 
     logging.getLogger().setLevel(logging.WARNING)  # Supress logging
 
@@ -418,6 +480,64 @@ def experiment():
     plt.savefig(results_dir / "res_time.png", bbox_inches="tight")
     plt.close()
 
+    # # Plot NLGCG vs grid residuals in time
+    # names = ["NLGCG"] + [f"scikit-learn mesh {Omega_size/size}" for size in sizes]
+    # colors = ["green", "blue", "blue", "blue"]
+    # styles = ["-", "-", "--", "-."]
+    # plt.figure(figsize=(11.25, 5))
+    # for domain, array, name, style, color in zip(
+    #     [times_nlgcg] + times_sklearn,
+    #     [residuals_nlgcg] + residuals_sklearn,
+    #     names,
+    #     styles,
+    #     colors,
+    # ):
+    #     plt.loglog(domain, array, style, label=name, color=color)
+    # plt.ylabel("Objective residual")
+    # plt.xlabel("Time (s)")
+    # plt.ylim(1e-12, 55)
+    # plt.legend()
+    # plt.savefig(results_dir / "grid_res_time.png", bbox_inches="tight")
+    # plt.close()
+
+    # # Plot NLGCG vs grid residuals in time
+    # point_labels = [f"mesh {Omega_size/size}" for size in sizes]
+    # plt.figure(figsize=(11.25, 5))
+    # plt.loglog(
+    #     times_pdap_grid, objectives_pdap_grid, marker="o", label="PDAP", color="green"
+    # )
+    # plt.loglog(
+    #     times_sklearn,
+    #     objectives_sklearn,
+    #     marker="o",
+    #     label="scikit-learn",
+    #     color="blue",
+    # )
+    # for xi, yi, label in zip(times_pdap_grid, objectives_pdap_grid, point_labels):
+    #     plt.annotate(
+    #         label,
+    #         (xi, yi),
+    #         textcoords="offset points",
+    #         xytext=(8, 8),
+    #         ha="left",
+    #         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=1),
+    #     )
+    # for xi, yi, label in zip(times_sklearn, objectives_sklearn, point_labels):
+    #     plt.annotate(
+    #         label,
+    #         (xi, yi),
+    #         textcoords="offset points",
+    #         xytext=(8, 8),
+    #         ha="left",
+    #         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=1),
+    #     )
+    # plt.ylabel("Objective residual")
+    # plt.xlabel("Time (s)")
+    # # plt.ylim(1e-12, 55)
+    # plt.legend()
+    # plt.savefig(results_dir / "grid_res_time.png", bbox_inches="tight")
+    # plt.close()
+
     # Plot inner loop
     plt.figure(figsize=(11.25, 5))
     plt.semilogy(
@@ -449,5 +569,5 @@ def experiment():
 
 
 if __name__ == "__main__":
-    test()
-    # experiment()
+    experiment()
+    # test()
