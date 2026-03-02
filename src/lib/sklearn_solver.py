@@ -28,12 +28,13 @@ class SKLEARN:
             self.f = get_default_f(self.K_raw, self.target)
             self.j = lambda u: self.f(u) + self.g(u)
 
-    def solve(self) -> np.ndarray:
+    def solve(self, tol: float = 1e-4, max_iter: int = 1000) -> np.ndarray:
         t_0 = time.time()
         model = Lasso(
             alpha=self.alpha,
             fit_intercept=False,
-            max_iter=10000,
+            tol=tol,
+            max_iter=max_iter,
         )
         model.fit(self.K, self.target)
         u = model.coef_

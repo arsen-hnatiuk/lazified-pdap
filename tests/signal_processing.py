@@ -271,8 +271,8 @@ def experiment():
         p=p,
         grad_P=grad_P,
         hess_P=hess_P,
-        norm_kappa=norm_kernel,
-        norm_kappa1=norm_kernel,
+        norm_kernel=norm_kernel,
+        norm_kernel1=norm_kernel,
         grad_j=grad_j,
         hess_j=hess_j,
         alpha=alpha,
@@ -326,26 +326,6 @@ def experiment():
     ) = exp.lpdap(tol=1e-12)
     logging.info("-------------------------------------------------------------------")
 
-    sklearn_solutions = {}
-    pdap_solutions = {}
-    sizes = [100, 1000, 10000, 100000]
-    for size in sizes:
-        grid = get_grid(size)
-        K_transpose = kernel(grid)
-
-        logging.info(f"Solving with scikit-learn on uniform grid of size {size}")
-        sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
-        u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve()
-        sklearn_solutions[size] = (u_sklearn, objective_value_sklearn, time_sklearn)
-
-        logging.info(f"Solving with PDAP on uniform grid of size {size}")
-        pdap_exp = LazifiedPDAPFinite(
-            K_transpose=K_transpose, alpha=alpha, target=target
-        )
-        u_pdap, objective_value_pdap, time_pdap = pdap_exp.solve(tol=1e-10)
-        pdap_solutions[size] = (u_pdap, objective_value_pdap, time_pdap)
-    logging.info("-------------------------------------------------------------------")
-
     optimum = (
         min(
             [
@@ -356,22 +336,93 @@ def experiment():
         )
         - 1e-14
     )
+
+    sklearn_solutions_default = {}
+    sklearn_solutions_custom = {}
+    fista_solutions = {}
+    flpdap_solutions = {}
+    sizes = [600, 6000, 60000]
+    for size in sizes:
+        grid = get_grid(size)
+        K_transpose = kernel(grid)
+
+        logging.info(
+            f"Solving with scikit-learn on uniform grid of size {size} with default parameters"
+        )
+        sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
+        u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve()
+        sklearn_solutions_default[size] = (
+            u_sklearn,
+            objective_value_sklearn - optimum,
+            time_sklearn,
+        )
+        logging.info(
+            "-------------------------------------------------------------------"
+        )
+
+        logging.info(
+            f"Solving with scikit-learn on uniform grid of size {size} with tol=1e-6, max_iter=10000"
+        )
+        sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
+        u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve(
+            tol=1e-6, max_iter=10000
+        )
+        sklearn_solutions_custom[size] = (
+            u_sklearn,
+            objective_value_sklearn - optimum,
+            time_sklearn,
+        )
+        logging.info(
+            "-------------------------------------------------------------------"
+        )
+
+        logging.info(f"Solving with FISTA on uniform grid of size {size}")
+        fista_exp = FISTA(K=K_transpose.T, alpha=alpha, target=target)
+        u_fista, objective_values_fista, times_fista = fista_exp.solve(max_time=60)
+        fista_solutions[size] = (u_fista, objective_values_fista - optimum, times_fista)
+        logging.info(
+            "-------------------------------------------------------------------"
+        )
+        # logging.info(f"Solving with FISTA on uniform grid of size {size}")
+        # fista_exp = Fista(lambda_=alpha)
+        # u_fista, objective_values_fista, times_fista = fista_exp.fit(
+        #     K=K_transpose.T, y=target
+        # )
+        # fista_solutions[size] = (u_fista, objective_values_fista - optimum, times_fista)
+        # logging.info(
+        #     "-------------------------------------------------------------------"
+        # )
+
+        logging.info(f"Solving with finite LPDAP on uniform grid of size {size}")
+        flpdap_exp = LazifiedPDAPFinite(
+            K_transpose=K_transpose, alpha=alpha, target=target
+        )
+        u_flpdap, objective_values_flpdap, times_flpdap = flpdap_exp.solve(tol=1e-10)
+        flpdap_solutions[size] = (
+            u_flpdap,
+            objective_values_flpdap - optimum,
+            times_flpdap,
+        )
+        logging.info(
+            "-------------------------------------------------------------------"
+        )
+
     residuals_pdap = objective_values_pdap - optimum
     residuals_nlgcg = objective_values_nlgcg - optimum
     residuals_lpdap = objective_values_lpdap - optimum
-    times_sklearn = [times for _, _, times in sklearn_solutions.values()]
-    objectives_sklearn = [objective for _, objective, _ in sklearn_solutions.values()]
-    times_pdap_grid = [times for _, _, times in pdap_solutions.values()]
-    objectives_pdap_grid = [objective for _, objective, _ in pdap_solutions.values()]
 
     for size in sizes:
-        u_sklearn, objective_value_sklearn, time_sklearn = sklearn_solutions[size]
+        u_flpdap, residuals_flpdap, times_flpdap = flpdap_solutions[size]
         logging.info(
-            f"Scikit-learn on grid of size {size}: objective value {objective_value_sklearn:.12E}, time {time_sklearn:.3f}s"
+            f"Finite LPDAP on grid of size {size}: absolute residual {residuals_flpdap[-1]:.12E}, time {times_flpdap[-1]:.3f}s"
         )
-        u_pdap, objective_value_pdap, time_pdap = pdap_solutions[size]
+        u_sklearn, residual_sklearn, time_sklearn = sklearn_solutions_default[size]
         logging.info(
-            f"PDAP on grid of size {size}: objective value {objective_value_pdap:.12E}, time {time_pdap:.3f}s"
+            f"Scikit-learn default on grid of size {size}: absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap[-1]:.12E}, time {time_sklearn:.3f}s"
+        )
+        u_sklearn, residual_sklearn, time_sklearn = sklearn_solutions_custom[size]
+        logging.info(
+            f"Scikit-learn custom on grid of size {size}: absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap[-1]:.12E}, time {time_sklearn:.3f}s"
         )
 
     logging.getLogger().setLevel(logging.WARNING)  # Supress logging
@@ -480,25 +531,63 @@ def experiment():
     plt.savefig(results_dir / "res_time.png", bbox_inches="tight")
     plt.close()
 
-    # # Plot NLGCG vs grid residuals in time
-    # names = ["NLGCG"] + [f"scikit-learn mesh {Omega_size/size}" for size in sizes]
-    # colors = ["green", "blue", "blue", "blue"]
-    # styles = ["-", "-", "--", "-."]
-    # plt.figure(figsize=(11.25, 5))
-    # for domain, array, name, style, color in zip(
-    #     [times_nlgcg] + times_sklearn,
-    #     [residuals_nlgcg] + residuals_sklearn,
-    #     names,
-    #     styles,
-    #     colors,
-    # ):
-    #     plt.loglog(domain, array, style, label=name, color=color)
-    # plt.ylabel("Objective residual")
-    # plt.xlabel("Time (s)")
-    # plt.ylim(1e-12, 55)
-    # plt.legend()
-    # plt.savefig(results_dir / "grid_res_time.png", bbox_inches="tight")
-    # plt.close()
+    # Plot FLPDAP vs FISTA residuals on grid in time
+    names = (
+        [f"FISTA, mesh {Omega_size/size}" for size in sizes]
+        + [f"Finite LPDPA, mesh {Omega_size/size}" for size in sizes]
+        + [f"LPDAP, mesh {0}"]
+    )
+    colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
+    styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
+    residuals_flpdap = [res for _, res, _ in flpdap_solutions.values()]
+    times_flpdap = [tim for _, _, tim in flpdap_solutions.values()]
+    residuals_fista = [res for _, res, _ in fista_solutions.values()]
+    times_fista = [tim for _, _, tim in fista_solutions.values()]
+    plt.figure(figsize=(11.25, 5))
+    for domain, array, name, style, color in zip(
+        times_fista + times_flpdap + [times_lpdap],
+        residuals_fista + residuals_flpdap + [residuals_lpdap],
+        names,
+        styles,
+        colors,
+    ):
+        plt.loglog(domain, array, style, label=name, color=color)
+    plt.ylabel("Objective residual")
+    plt.xlabel("Time (s)")
+    plt.ylim(1e-10, 100)
+    plt.legend()
+    plt.savefig(results_dir / "grid_res_time.png", bbox_inches="tight")
+    plt.close()
+
+    # Plot FLPDAP vs FISTA residuals on grid in iters
+    names = (
+        [f"FISTA, mesh {Omega_size/size}" for size in sizes]
+        + [f"Finite LPDPA, mesh {Omega_size/size}" for size in sizes]
+        + [f"LPDAP, mesh {0}"]
+    )
+    colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
+    styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
+    residuals_flpdap = [res for _, res, _ in flpdap_solutions.values()]
+    residuals_fista = [res for _, res, _ in fista_solutions.values()]
+    plt.figure(figsize=(11.25, 5))
+    for domain, array, name, style, color in zip(
+        [
+            np.arange(len(ar))
+            for ar in residuals_fista + residuals_flpdap + [residuals_lpdap]
+        ],
+        residuals_fista + residuals_flpdap + [residuals_lpdap],
+        names,
+        styles,
+        colors,
+    ):
+        plt.loglog(domain, array, style, label=name, color=color)
+    plt.ylabel("Objective residual")
+    plt.xlabel("Iterations")
+    plt.ylim(1e-10, 100)
+    # plt.xlim(0, 100)
+    plt.legend()
+    plt.savefig(results_dir / "grid_res_iter.png", bbox_inches="tight")
+    plt.close()
 
     # # Plot NLGCG vs grid residuals in time
     # point_labels = [f"mesh {Omega_size/size}" for size in sizes]

@@ -3,6 +3,7 @@ import logging
 import time
 from lib.default_values import *
 from lib.ssn import SSN
+from lib.sklearn_solver import SKLEARN
 from lib.measure import Measure
 
 logging.basicConfig(
@@ -36,10 +37,6 @@ class LazifiedPDAPFinite:
         self.C = 4 * self.L * self.M**2 * self.norm_K**2  # Smoothness constant
         self.machine_precision = 1e-12
 
-    def explicit_Phi(self, p: np.ndarray, u: np.ndarray, v: np.ndarray) -> float:
-        # <p(u),v-u>+g(u)-g(v)
-        return (v + (u * -1)).duality_pairing(p) + self.g(u) - self.g(v)
-
     def Phi(self, p_u: np.ndarray, u: Measure, x: int) -> float:
         # M*max{0,||p_u||-alpha}+g(u)-<p_u,u>
         return (
@@ -54,6 +51,9 @@ class LazifiedPDAPFinite:
         K_support = self.K_transpose[u_plus.support.flatten()].T
         ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
         u_raw = ssn.solve(tol=Psi, u_0=u_plus.coefficients)
+        if ssn.Psi(u_raw) > Psi:
+            sklearn = SKLEARN(K=K_support, alpha=self.alpha, target=self.target)
+            u_raw = sklearn.solve(tol=self.machine_precision)[0]
         u_raw[np.abs(u_raw) < self.machine_precision] = 0
         # Reconstruct u
         u = Measure(
@@ -68,57 +68,38 @@ class LazifiedPDAPFinite:
         p_u = -self.K_transpose @ residuum_u
         x = np.argmax(np.abs(p_u))
         epsilon = 0.5 * self.j(u) / self.M
-        Psi = epsilon
+        Psi = self.M * epsilon  # epsilon
         k = 1
         Phi_value = self.Phi(p_u, u, x)
         start_time = time.time()
-        ssn_time = 0
+        objectives = [self.j(u)]
+        times = [time.time() - start_time]
         while Phi_value > tol:
-            u_old = u * 1
-            Psi_old = Psi
-            Psi = max(min(Psi, self.M * epsilon), self.machine_precision)
-            if x in u.support:
-                Psi = Psi / 2
+            Psi = max(min(0.5 * Phi_value, Psi), 2 * self.machine_precision)
             if abs(p_u[x]) < self.alpha:
                 v_k = Measure()
             else:
                 v_k = Measure(support=[[x]], coefficients=[self.M * np.sign(p_u[x])])
-            Phi_x = self.explicit_Phi(p=p_u, u=u, v=v_k)
-            eta = min(1, Phi_x / self.C)
+            eta = max(min(1, Phi_value / self.C), 10 * self.machine_precision)
             u = u * (1 - eta) + v_k * eta
 
-            ssn_start = time.time()
             u = self.finite_dimensional_step(u, Psi)
-            ssn_time += time.time() - ssn_start
-
             residuum_u = self.residuum(u)
             p_u = -self.K_transpose @ residuum_u
             x = np.argmax(np.abs(p_u))
             Phi_value = self.Phi(p_u, u, x)
+            self.M = self.j(u) / self.alpha
 
-            # if not np.array_equal(u.coefficients, u_old.coefficients) or Psi_old != Psi:
-            #     # Low-dimensional optimization
-            #     ssn_start = time.time()
-            #     u = self.finite_dimensional_step(u, Psi)
-            #     ssn_time += time.time() - ssn_start
-
-            #     if not np.array_equal(
-            #         u.coefficients, u_old.coefficients
-            #     ) or not np.array_equal(u.support, u_old.support):
-            #         # SSN found a different solution
-            #         residuum_u = self.residuum(u)
-            #         p_u = -self.K_transpose @ residuum_u
-            #         x = np.argmax(np.abs(p_u))
-            #         Phi_value = self.Phi(p_u, u, x)
-
-            logging.info(
-                f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {len(u.support)}, Psi {Psi:.3E}"
-            )
+            # logging.info(
+            #     f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {u.support}, Psi {Psi:.3E}, x: {x}"
+            # )
+            objectives.append(self.j(u))
+            times.append(time.time() - start_time)
             k += 1
         logging.info(
-            f"LPDAP converged in {k} iterations and {time.time()-start_time:.3f}s (SSN time {ssn_time:.3f}s) to tolerance {tol:.3E} with final sparsity of {len(u.support)}"
+            f"Finite LPDAP converged in {k} iterations and {time.time()-start_time:.3f}s to tolerance {tol:.3E} with final sparsity of {len(u.support)} and objective {objectives[-1]:.12E}"
         )
-        return u, self.j(u), time.time() - start_time
+        return u, objectives, times
 
     def solve_exact(self, tol: float) -> dict:
         u = self.u_0 * 1
@@ -128,22 +109,24 @@ class LazifiedPDAPFinite:
         k = 1
         Phi_value = self.Phi(p_u, u, x)
         start_time = time.time()
-        ssn_time = 0
+        objectives = [self.j(u)]
+        times = [time.time() - start_time]
         while Phi_value > tol:
-            eta = min(1, Phi_value / self.C)
+            eta = max(min(1, Phi_value / self.C), 10 * self.machine_precision)
             v_k = Measure(support=[[x]], coefficients=[self.M * np.sign(p_u[x])])
             u_plus = u * (1 - eta) + v_k * eta
-            ssn_start = time.time()
             u = self.finite_dimensional_step(u_plus, self.machine_precision)
-            ssn_time += time.time() - ssn_start
             residuum_u = self.residuum(u)
             p_u = -self.K_transpose @ residuum_u
             x = np.argmax(np.abs(p_u))
             Phi_value = self.Phi(p_u, u, x)
+            self.M = self.j(u) / self.alpha
 
-            logging.info(f"{k}: Phi {Phi_value:.3E}, support {len(u.support)}")
+            # logging.info(f"{k}: Phi {Phi_value:.3E}, support {len(u.support)}")
+            objectives.append(self.j(u))
+            times.append(time.time() - start_time)
             k += 1
         logging.info(
-            f"PDAP converged in {k} iterations and {time.time()-start_time:.3f}s (SSN time {ssn_time:.3f}s) to tolerance {tol:.3E} with final sparsity of {len(u.support)}"
+            f"Finite PDAP converged in {k} iterations and {time.time()-start_time:.3f}s to tolerance {tol:.3E} with final sparsity of {len(u.support)} and objective {objectives[-1]:.12E}"
         )
-        return u, self.j(u), time.time() - start_time
+        return u, objectives, times

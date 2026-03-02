@@ -22,8 +22,8 @@ class LazifiedPDAP:
         p: Callable,
         grad_P: Callable,
         hess_P: Callable,
-        norm_kappa: float,
-        norm_kappa1: float,
+        norm_kernel: float,
+        norm_kernel1: float,
         grad_j: Callable,
         hess_j: Callable,
         alpha: float,
@@ -55,14 +55,14 @@ class LazifiedPDAP:
         self.bar_m = bar_m
         self.L = L
         self.L_H = L_H
-        self.norm_kappa = norm_kappa
-        self.norm_kappa1 = norm_kappa1
+        self.norm_kernel = norm_kernel
+        self.norm_kernel1 = norm_kernel1
         self.Omega = Omega  # Example [[0,1],[1,2]] for [0,1]x[1,2]
         self.j = lambda u: self.f(u) + self.g(u.coefficients)
         self.j_tilde = lambda pos, coef: self.f(Measure(pos, coef)) + self.g(coef)
         self.u_0 = Measure()
         self.M = min(M, self.j(self.u_0) / self.alpha)  # Bound on the norm of iterates
-        self.C = 4 * self.L * self.M**2 * self.norm_kappa**2
+        self.C = 4 * self.L * self.M**2 * self.norm_kernel**2
         self.R = R
         self.projection = projection
         self.global_search_resolution = int(
@@ -413,9 +413,9 @@ class LazifiedPDAP:
             ):
                 # Recompute step and update running metrics
                 Psi_k = max(Psi_k / 2, self.machine_precision)
-                logging.info(
-                    f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, dropped:{dropped}"
-                )
+                # logging.info(
+                #     f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, dropped:{dropped}"
+                # )
                 steps.append("recompute")
                 s += 1
                 continue
@@ -442,12 +442,12 @@ class LazifiedPDAP:
                     16
                     * self.M
                     * self.L
-                    * self.norm_kappa1**2
+                    * self.norm_kernel1**2
                     * (
                         2 * self.M * np.sqrt(self.R / self.theta)
                         + 2
                         * self.M
-                        * self.norm_kappa1**2
+                        * self.norm_kernel1**2
                         * self.L
                         / (self.theta * np.sqrt(self.gamma))
                         + np.sqrt(self.M / self.theta)
@@ -469,12 +469,15 @@ class LazifiedPDAP:
 
             # Update running metrics
             steps.append("normal")
-            logging.info(
-                f"{k}: {choice}, Phi_k: {Phi_k:.3E}, epsilon: {epsilon:.3E}, support: {len(u.support)}, dropped:{dropped}"
-            )
-            logging.info("==============================================")
+            # logging.info(
+            #     f"{k}: {choice}, Phi_k: {Phi_k:.3E}, epsilon: {epsilon:.3E}, support: {len(u.support)}, dropped:{dropped}"
+            # )
+            # logging.info("==============================================")
             k += 1
         self.M = self.j(self.u_0) / self.alpha
+        logging.info(
+            f"LPDAP converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)}"
+        )
         return (
             u,
             intermediate_u,
@@ -501,7 +504,7 @@ class LazifiedPDAP:
         objective_values = [self.j(u)]
         while len(u.coefficients) == 0 or Phi_k > tol:
             v_k = Measure(support=np.array([x]), coefficients=[1])
-            eta = min(1, Phi_k / self.C)
+            eta = max(min(1, Phi_k / self.C), 10 * self.machine_precision)
             u_plus = u * (1 - eta) + v_k * eta
             u, finite_Psi = self.finite_dimensional_step(u_plus, tol)
             self.M = min(self.M, self.j(u) / self.alpha)
@@ -511,14 +514,19 @@ class LazifiedPDAP:
             x, global_valid = self.global_search(u, 1000, q_u, p_u)
             P_value = np.abs(p_u(x))[0]
             Phi_k = self.M * max((P_value - self.alpha), 0) + q_u
-            logging.info(f"{k}: Phi:{Phi_k:.3E}, support: {len(u.support)}")
-            logging.info("==============================================")
+            # logging.info(
+            #     f"{k}: Phi:{Phi_k:.3E}, support: {len(u.support)}, obj: {self.j(u):.12E}, x: {x}, support: {u.support}"
+            # )
+            # logging.info("==============================================")
             k += 1
             P_values.append(P_value)
             times.append(time.time() - initial_time)
             supports.append(len(u.support))
             objective_values.append(self.j(u))
         self.M = self.j(self.u_0) / self.alpha
+        logging.info(
+            f"PDAP converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)}"
+        )
         return u, P_values, times, supports, objective_values
 
     def local_merging(self, u: Measure) -> tuple:
@@ -718,9 +726,9 @@ class LazifiedPDAP:
                     inner_loop.append(1)
                     objective_values.append(self.j(u_ks))
                     epsilons.append(epsilon_ks)
-                    logging.info(
-                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
-                    )
+                    # logging.info(
+                    #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
+                    # )
                     break
                 else:
                     optimal = False
@@ -732,10 +740,10 @@ class LazifiedPDAP:
                     inner_loop.append(1)
                     objective_values.append(self.j(u_ks_new))
                     epsilons.append(epsilon_ks)
-                    logging.info(
-                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
-                    )
-                    logging.info(f"Inequality 6.7: {second_inequality}")
+                    # logging.info(
+                    #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
+                    # )
+                    # logging.info(f"Inequality 6.7: {second_inequality}")
                     break
 
                 first_inequalities = self.first_inequalities(
@@ -748,10 +756,10 @@ class LazifiedPDAP:
                     inner_loop.append(1)
                     objective_values.append(self.j(u_ks_new))
                     epsilons.append(epsilon_ks)
-                    logging.info(
-                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
-                    )
-                    logging.info(f"Inequalities 6.6: {first_inequalities}")
+                    # logging.info(
+                    #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
+                    # )
+                    # logging.info(f"Inequalities 6.6: {first_inequalities}")
                     break
 
                 if s + 1 % drop_frequency == 0:
@@ -776,9 +784,9 @@ class LazifiedPDAP:
                 inner_loop.append(1)
                 objective_values.append(self.j(u_ks))
                 epsilons.append(epsilon_ks)
-                logging.info(
-                    f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
-                )
+                # logging.info(
+                #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
+                # )
 
             if optimal:
                 u = u_ks * 1
@@ -814,11 +822,14 @@ class LazifiedPDAP:
             inner_loop.append(0)
             objective_values.append(self.j(u))
             epsilons.append(epsilon)
-            logging.info(
-                f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon}, objective: {self.j(u):.3E}, dropped: {dropped}"
-            )
+            # logging.info(
+            #     f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon:.3E}, objective: {self.j(u):.12E}, dropped: {dropped}"
+            # )
 
         self.M = self.j(self.u_0) / self.alpha
+        logging.info(
+            f"NLGCG converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)}"
+        )
         return (
             u,
             times,
