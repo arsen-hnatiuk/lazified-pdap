@@ -476,7 +476,7 @@ class LazifiedPDAP:
             k += 1
         self.M = self.j(self.u_0) / self.alpha
         logging.info(
-            f"LPDAP converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)}"
+            f"LPDAP converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)} and objective {self.j(u):.12E}"
         )
         return (
             u,
@@ -525,7 +525,7 @@ class LazifiedPDAP:
             objective_values.append(self.j(u))
         self.M = self.j(self.u_0) / self.alpha
         logging.info(
-            f"PDAP converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)}"
+            f"PDAP converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)} and objective {self.j(u):.12E}"
         )
         return u, P_values, times, supports, objective_values
 
@@ -828,7 +828,7 @@ class LazifiedPDAP:
 
         self.M = self.j(self.u_0) / self.alpha
         logging.info(
-            f"NLGCG converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)}"
+            f"NLGCG converged to tolerance {tol} in {times[-1]:.3E} seconds with final sparsity {len(u.support)} and objective {self.j(u):.12E}"
         )
         return (
             u,

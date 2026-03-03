@@ -352,7 +352,16 @@ def experiment():
     for _ in range(loops):
         logging.info(f"Loop {_+1}")
 
-        true_sources = sample_domain(10, Omega, rng)
+        true_sources = []
+        while len(true_sources) < 10:
+            point = sample_domain(1, Omega, rng).flatten()
+            if not len(true_sources):
+                true_sources.append(point)
+            elif not any(
+                np.linalg.norm(point - source) < 5 * R for source in true_sources
+            ):
+                true_sources.append(point)
+        true_sources = np.array(true_sources)
         true_weights_raw = sample_domain(10, np.array([[-1, 1]]), rng).flatten()
         weight_signs = np.sign(true_weights_raw)
         true_weights = weight_signs * (np.sqrt(np.abs(true_weights_raw)))
@@ -395,14 +404,14 @@ def experiment():
             R=R,
         )
 
-        # PDAP
-        logging.info(f"Computing PDAP solution")
-        u_pdap, P_values_pdap, times_pdap, supports_pdap, objective_values_pdap = (
-            exp.pdap(tol=1e-12)
-        )
-        logging.info(
-            "-------------------------------------------------------------------"
-        )
+        # # PDAP
+        # logging.info(f"Computing PDAP solution")
+        # u_pdap, P_values_pdap, times_pdap, supports_pdap, objective_values_pdap = (
+        #     exp.pdap(tol=1e-12)
+        # )
+        # logging.info(
+        #     "-------------------------------------------------------------------"
+        # )
 
         # NLPDAP
         logging.info(f"Computing NLPDAP solution")
@@ -424,27 +433,27 @@ def experiment():
             "-------------------------------------------------------------------"
         )
 
-        # LPDAP
-        logging.info(f"Computing LPDAP solution")
-        (
-            u_lpdap,
-            intermediate_u_lpdap,
-            Phi_ks_lpdap,
-            times_lpdap,
-            supports_lpdap,
-            objective_values_lpdap,
-            dropped_tot_lpdap,
-            epsilons_lpdap,
-        ) = exp.lpdap(tol=1e-12)
-        logging.info(
-            "-------------------------------------------------------------------"
-        )
+        # # LPDAP
+        # logging.info(f"Computing LPDAP solution")
+        # (
+        #     u_lpdap,
+        #     intermediate_u_lpdap,
+        #     Phi_ks_lpdap,
+        #     times_lpdap,
+        #     supports_lpdap,
+        #     objective_values_lpdap,
+        #     dropped_tot_lpdap,
+        #     epsilons_lpdap,
+        # ) = exp.lpdap(tol=1e-12)
+        # logging.info(
+        #     "-------------------------------------------------------------------"
+        # )
 
         optimum = (
             min(
                 [
-                    objective_values_pdap[-1],
-                    objective_values_lpdap[-1],
+                    # objective_values_pdap[-1],
+                    # objective_values_lpdap[-1],
                     objective_values_nlgcg[-1],
                 ]
             )
@@ -460,53 +469,53 @@ def experiment():
             grid = get_grid(size)
             K_transpose = kernel(grid)
 
-            logging.info(
-                f"Solving with scikit-learn on uniform grid of size {int(size**2)} with default parameters"
-            )
-            sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
-            u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve()
-            sklearn_solutions_default[size] = (
-                u_sklearn,
-                objective_value_sklearn - optimum,
-                time_sklearn,
-            )
-            logging.info(
-                "-------------------------------------------------------------------"
-            )
+            # logging.info(
+            #     f"Solving with scikit-learn on uniform grid of size {int(size**2)} with default parameters"
+            # )
+            # sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
+            # u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve()
+            # sklearn_solutions_default[size] = (
+            #     u_sklearn,
+            #     objective_value_sklearn - optimum,
+            #     time_sklearn,
+            # )
+            # logging.info(
+            #     "-------------------------------------------------------------------"
+            # )
 
-            logging.info(
-                f"Solving with scikit-learn on uniform grid of size {int(size**2)} with tol=1e-6, max_iter=10000"
-            )
-            sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
-            u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve(
-                tol=1e-6, max_iter=10000
-            )
-            sklearn_solutions_custom[size] = (
-                u_sklearn,
-                objective_value_sklearn - optimum,
-                time_sklearn,
-            )
-            logging.info(
-                "-------------------------------------------------------------------"
-            )
+            # logging.info(
+            #     f"Solving with scikit-learn on uniform grid of size {int(size**2)} with tol=1e-6, max_iter=10000"
+            # )
+            # sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
+            # u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve(
+            #     tol=1e-6, max_iter=10000
+            # )
+            # sklearn_solutions_custom[size] = (
+            #     u_sklearn,
+            #     objective_value_sklearn - optimum,
+            #     time_sklearn,
+            # )
+            # logging.info(
+            #     "-------------------------------------------------------------------"
+            # )
 
-            logging.info(f"Solving with FISTA on uniform grid of size {int(size**2)}")
-            fista_exp = FISTA(K=K_transpose.T, alpha=alpha, target=target)
-            u_fista, objective_values_fista, times_fista = fista_exp.solve(max_time=300)
-            fista_solutions[size] = (
-                u_fista,
-                adapt_time(
-                    times_fista,
-                    objective_values_fista - optimum,
-                    frame=300,
-                    resolution=resolution,
-                ),
-                times_fista,
-                objective_values_fista - optimum,
-            )
-            logging.info(
-                "-------------------------------------------------------------------"
-            )
+            # logging.info(f"Solving with FISTA on uniform grid of size {int(size**2)}")
+            # fista_exp = FISTA(K=K_transpose.T, alpha=alpha, target=target)
+            # u_fista, objective_values_fista, times_fista = fista_exp.solve(max_time=300)
+            # fista_solutions[size] = (
+            #     u_fista,
+            #     adapt_time(
+            #         times_fista,
+            #         objective_values_fista - optimum,
+            #         frame=300,
+            #         resolution=resolution,
+            #     ),
+            #     times_fista,
+            #     objective_values_fista - optimum,
+            # )
+            # logging.info(
+            #     "-------------------------------------------------------------------"
+            # )
 
             logging.info(
                 f"Solving with finite LPDAP on uniform grid of size {int(size**2)}"

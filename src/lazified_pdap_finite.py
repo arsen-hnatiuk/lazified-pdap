@@ -52,6 +52,7 @@ class LazifiedPDAPFinite:
         ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
         u_raw = ssn.solve(tol=Psi, u_0=u_plus.coefficients)
         if ssn.Psi(u_raw) > Psi:
+            logging.info(ssn.Psi(u_raw))
             sklearn = SKLEARN(K=K_support, alpha=self.alpha, target=self.target)
             u_raw = sklearn.solve(tol=self.machine_precision)[0]
         u_raw[np.abs(u_raw) < self.machine_precision] = 0
@@ -90,9 +91,9 @@ class LazifiedPDAPFinite:
             Phi_value = self.Phi(p_u, u, x)
             self.M = self.j(u) / self.alpha
 
-            # logging.info(
-            #     f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {u.support}, Psi {Psi:.3E}, x: {x}"
-            # )
+            logging.info(
+                f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {u.support}, Psi {Psi:.3E}, x: {x}"
+            )
             objectives.append(self.j(u))
             times.append(time.time() - start_time)
             k += 1

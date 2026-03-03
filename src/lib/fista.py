@@ -32,10 +32,6 @@ class FISTA:
         to_return = np.sign(inner_value) * np.maximum(
             np.abs(inner_value) - self.alpha / self.L, 0
         )
-        # to_return = np.zeros(q.shape)
-        # for i, val in enumerate(inner_value):
-        #     if np.abs(val) > self.alpha / self.L:
-        #         to_return[i] = val - self.alpha * np.sign(val) / self.L
         return to_return
 
     def solve(self, max_time: int = 1000):

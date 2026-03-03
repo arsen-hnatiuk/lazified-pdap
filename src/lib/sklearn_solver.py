@@ -39,7 +39,9 @@ class SKLEARN:
         model.fit(self.K, self.target)
         u = model.coef_
         obj = self.j(u)
-        logging.debug(f"Scikit-learn in {self.K.shape[1]} dimensions converged")
+        logging.debug(
+            f"Scikit-learn in {self.K.shape[1]} dimensions converged to objective {obj:.12E}"
+        )
         return u, obj, time.time() - t_0
 
     def solve_experiment(self, tol: float):
