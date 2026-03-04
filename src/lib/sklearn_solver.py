@@ -1,5 +1,4 @@
 from sklearn.linear_model import Lasso
-from sklearn.preprocessing import StandardScaler
 import numpy as np
 import time
 import logging
@@ -19,8 +18,7 @@ class SKLEARN:
     ) -> None:
         self.K_raw = K
         if all(self.K_raw.shape):
-            self.scaler = StandardScaler()
-            self.K = self.K_raw  # self.scaler.fit_transform(self.K_raw)
+            self.K = self.K_raw
             self.machine_precision = 1e-12
             self.target = target
             self.alpha = alpha / self.K.shape[0]

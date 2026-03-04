@@ -53,27 +53,19 @@ class SSN:
         variable_part = max(0, self.M * (np.max(p) - self.alpha))
         return constant_part + variable_part
 
-    def prox_unconstrained(self, q: np.ndarray) -> np.ndarray:
-        to_return = np.zeros(q.shape)
-        for i, val in enumerate(q):
-            if np.abs(val) > self.alpha:
-                to_return[i] = val - self.alpha * np.sign(val)
-        return to_return
+    def prox_unconstrained(self, q: np.ndarray, c: float = 1) -> np.ndarray:
+        return np.sign(q) * np.maximum(np.abs(q) - self.alpha / c, 0)
 
-    def prox_positive(self, q: np.ndarray) -> np.ndarray:
-        to_return = np.zeros(q.shape)
-        for i, val in enumerate(q):
-            if val > self.alpha:
-                to_return[i] = val - self.alpha
-        return to_return
+    def prox_positive(self, q: np.ndarray, c: float = 1) -> np.ndarray:
+        return np.sign(q) * np.maximum(q - self.alpha / c, 0)
 
-    def grad_prox_unconstrained(self, q: np.ndarray) -> np.ndarray:
-        return np.diag(np.where(np.abs(q) > self.alpha, 1, 0))
+    def grad_prox_unconstrained(self, q: np.ndarray, c: float = 1) -> np.ndarray:
+        return np.diag(np.where(np.abs(q) > self.alpha / c, 1, 0))
 
-    def grad_prox_positive(self, q: np.ndarray) -> np.ndarray:
-        return np.diag(np.where(q > self.alpha, 1, 0))
+    def grad_prox_positive(self, q: np.ndarray, c: float = 1) -> np.ndarray:
+        return np.diag(np.where(q > self.alpha / c, 1, 0))
 
-    def solve(self, tol: float, u_0: np.ndarray) -> np.ndarray:
+    def solve(self, tol: float, u_0: np.ndarray, do_logging: bool = True) -> np.ndarray:
         # Semismooth Newton method (globalized via line search)
         if not all(self.K.shape):
             logging.debug("Empty input space, retuning u_0")
@@ -87,8 +79,8 @@ class SSN:
         k = 0
         while psi_val > tol:
             if k > self.maximum_iterations:
-                logging.info(
-                    f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: MAX ITERATIONS REACHED, {psi_val:.3E} achieved"
+                logging.warning(
+                    f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: MAX ITERATIONS REACHED, {psi_val:.3E} achieved, theta: {theta}, qdiff: {qdiff}"
                 )
                 if self.j(prox_q) <= initial_j:
                     return prox_q
@@ -98,13 +90,13 @@ class SSN:
             left_hand = Id + (self.hessian - Id) @ self.grad_prox(q)
             theta = theta / 10
             qdiff = tol + 1
-            while qdiff >= tol:
+            while qdiff >= self.machine_precision:
                 theta = 2 * theta
                 try:
                     direction = np.linalg.solve(left_hand + theta * Id, right_hand)
                 except np.linalg.LinAlgError:
-                    logging.info(
-                        f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: LINEAR SYSTEM NOT SOLVABLE, {psi_val:.3E} achieved"
+                    logging.warning(
+                        f"SSN in {len(prox_q)} dimensions and tolerance {tol:.3E}: LINEAR SYSTEM NOT SOLVABLE, {psi_val:.3E} achieved, theta: {theta}, qdiff: {qdiff}"
                     )
                     if self.j(prox_q) <= initial_j:
                         return prox_q
@@ -115,17 +107,17 @@ class SSN:
                 qdiff = self.j(prox_qnew) - self.j(prox_q)
             q = qnew
             prox_q = prox_qnew
-            self.M = float(min(self.M, self.j(prox_q) / self.alpha))
             psi_val = self.Psi(prox_q)
             k += 1
 
-        logging.info(
-            f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
-        )
-        if self.j(prox_q) <= initial_j:
-            return prox_q
-        else:
-            return u_0
+        if do_logging:
+            logging.info(
+                f"SSN in {len(prox_q)} dimensions converged in {k} iterations to tolerance {tol:.3E}"
+            )
+        if k == 0:
+            if self.j(q) < self.j(prox_q):
+                return q
+        return prox_q
 
     def solve_experiment(self, tol: float):
         time_0 = time.time()

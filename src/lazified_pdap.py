@@ -36,7 +36,6 @@ class LazifiedPDAP:
         L: float,
         L_H: float,
         R: float,
-        projection: str = "box",  # box or sphere
         M: int = 1e6,
         random_grid_size: int = int(1e4),
     ) -> None:
@@ -64,9 +63,8 @@ class LazifiedPDAP:
         self.M = min(M, self.j(self.u_0) / self.alpha)  # Bound on the norm of iterates
         self.C = 4 * self.L * self.M**2 * self.norm_kernel**2
         self.R = R
-        self.projection = projection
-        self.global_search_resolution = int(
-            max([bound[1] - bound[0] for bound in self.Omega]) / self.R
+        self.global_search_resolution = max(
+            int(max([bound[1] - bound[0] for bound in self.Omega]) / self.R), 100
         )
         self.grad_j = grad_j
         self.hess_j = hess_j
@@ -78,14 +76,10 @@ class LazifiedPDAP:
 
     def project_into_domain(self, x: np.ndarray) -> np.ndarray:
         # Project an array into domain, parallelized
-        if self.projection == "sphere":
-            norms = np.linalg.norm(x, axis=1)
-            return np.divide(x, norms.reshape(-1, 1))
-        else:
-            for i, bounds in zip(range(x.shape[1]), self.Omega):
-                column = x[:, i].copy()
-                x[:, i] = np.clip(column, bounds[0], bounds[1])
-            return x
+        for i, bounds in zip(range(x.shape[1]), self.Omega):
+            column = x[:, i].copy()
+            x[:, i] = np.clip(column, bounds[0], bounds[1])
+        return x
 
     def lsi(
         self,
@@ -138,9 +132,6 @@ class LazifiedPDAP:
             ):
                 try:
                     d = np.linalg.solve(hessian, -gradient)  # Newton step
-                    if self.projection == "sphere":
-                        projection = np.eye(len(point)) - np.outer(point, point)
-                        d = projection @ d
                     new_points[i] = point + d
                 except np.linalg.LinAlgError:
                     new_points[i] = point + 0.1 * gradient
@@ -189,36 +180,21 @@ class LazifiedPDAP:
         return x_tilde, lsi_set, hat_ind
 
     def get_grid(self, u: Measure) -> np.ndarray:
-        if self.projection == "sphere":
-            dimensions = self.Omega.shape[0]
-            sample_raw = np.random.multivariate_normal(
-                mean=np.zeros(dimensions),
-                cov=np.eye(dimensions),
-                size=self.random_grid_size,
-            )
-            sample_norms = np.linalg.norm(sample_raw, axis=1)
-            sample = np.divide(sample_raw, sample_norms.reshape(-1, 1))
-            if len(u.coefficients):
-                sample = np.vstack([sample, u.support])
-            return sample
-        else:
-            grid = (
-                np.array(
-                    np.meshgrid(
-                        *(
-                            np.linspace(
-                                bound[0], bound[1], self.global_search_resolution
-                            )
-                            for bound in self.Omega
-                        )
+        grid = (
+            np.array(
+                np.meshgrid(
+                    *(
+                        np.linspace(bound[0], bound[1], self.global_search_resolution)
+                        for bound in self.Omega
                     )
                 )
-                .reshape(len(self.Omega), -1)
-                .T
             )
-            if len(u.coefficients):
-                grid = np.vstack([grid, u.support])
-            return grid
+            .reshape(len(self.Omega), -1)
+            .T
+        )
+        if len(u.coefficients):
+            grid = np.vstack([grid, u.support])
+        return grid
 
     def global_search(
         self, u: Measure, epsilon: float, q_u: float, p_u: Callable
@@ -256,9 +232,6 @@ class LazifiedPDAP:
                 ):
                     try:
                         d = np.linalg.solve(hessian, -gradient)  # Newton step
-                        if self.projection == "sphere":
-                            projection = np.eye(len(point)) - np.outer(point, point)
-                            d = projection @ d
                         new_points[i] = point + d
                     except np.linalg.LinAlgError:
                         new_points[i] = point + 0.1 * gradient
@@ -299,7 +272,7 @@ class LazifiedPDAP:
         return to_return
 
     def finite_dimensional_step(
-        self, u: Measure, Psi: float, mode: str = "unconstrained"
+        self, u: Measure, Psi: float, do_logging: bool, mode: str = "unconstrained"
     ) -> tuple:
         if not len(u.coefficients):
             return u, Psi * 2
@@ -313,7 +286,9 @@ class LazifiedPDAP:
         ssn = SSN(
             K=K_support, alpha=self.alpha, target=self.target, M=self.M, mode=mode
         )
-        u_raw = ssn.solve(tol=Psi, u_0=u_0)
+        u_raw = ssn.solve(tol=Psi, u_0=u_0, do_logging=do_logging)
+        if ssn.j(u_raw) > ssn.j(u_0):
+            u_raw = u_0
         raw_Psi = ssn.Psi(u_raw)
         if mode == "positive":
             u_raw = u_raw * signs
@@ -345,7 +320,13 @@ class LazifiedPDAP:
                 return drop_u, True
         return u, False
 
-    def lpdap(self, tol: float, u_0: Measure = Measure(), Psi_0: float = 1) -> tuple:
+    def lpdap(
+        self,
+        tol: float,
+        u_0: Measure = Measure(),
+        Psi_0: float = 1,
+        do_logging: bool = True,
+    ) -> tuple:
         u = u_0 * 1
         intermediate_u = u * 1
         p_u = self.p(u)
@@ -376,10 +357,10 @@ class LazifiedPDAP:
             if k == 30:
                 intermediate_u = u * 1
             if len(u_plus.coefficients):
-                # Low-dimensional step
+                # Coefficient step
                 u_dropped, dropped = self.drop_step(u_plus)
                 u, finite_Phi = self.finite_dimensional_step(
-                    u_dropped, Psi_k, mode="positive"
+                    u_dropped, Psi_k, do_logging, mode="positive"
                 )
                 self.M = min(self.M, self.j(u) / self.alpha)
                 dropped_tot += dropped
@@ -413,9 +394,10 @@ class LazifiedPDAP:
             ):
                 # Recompute step and update running metrics
                 Psi_k = max(Psi_k / 2, self.machine_precision)
-                # logging.info(
-                #     f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, dropped:{dropped}"
-                # )
+                if do_logging:
+                    logging.info(
+                        f"Recompute {s}, Lazy: {global_valid}, Psi_k:{Psi_k:.3E}, Phi_k:{Phi_k:.3E}, objective: {self.j(u):.12E}"
+                    )
                 steps.append("recompute")
                 s += 1
                 continue
@@ -469,10 +451,11 @@ class LazifiedPDAP:
 
             # Update running metrics
             steps.append("normal")
-            # logging.info(
-            #     f"{k}: {choice}, Phi_k: {Phi_k:.3E}, epsilon: {epsilon:.3E}, support: {len(u.support)}, dropped:{dropped}"
-            # )
-            # logging.info("==============================================")
+            if do_logging:
+                logging.info(
+                    f"{k}: {choice}, Phi_k: {Phi_k:.3E}, epsilon: {epsilon:.3E}, support: {len(u.support)}, objective: {self.j(u):.12E}"
+                )
+                logging.info("==============================================")
             k += 1
         self.M = self.j(self.u_0) / self.alpha
         logging.info(
@@ -489,7 +472,9 @@ class LazifiedPDAP:
             epsilons,
         )
 
-    def pdap(self, tol: float, u_0: Measure = Measure()) -> tuple:
+    def pdap(
+        self, tol: float, u_0: Measure = Measure(), do_logging: bool = True
+    ) -> tuple:
         k = 1
         u = u_0 * 1
         p_u = self.p(u)
@@ -506,7 +491,7 @@ class LazifiedPDAP:
             v_k = Measure(support=np.array([x]), coefficients=[1])
             eta = max(min(1, Phi_k / self.C), 10 * self.machine_precision)
             u_plus = u * (1 - eta) + v_k * eta
-            u, finite_Psi = self.finite_dimensional_step(u_plus, tol)
+            u, finite_Psi = self.finite_dimensional_step(u_plus, tol, do_logging)
             self.M = min(self.M, self.j(u) / self.alpha)
             p_u = self.p(u)
             q_u = self.g(u.coefficients) - u.duality_pairing(p_u)
@@ -514,10 +499,11 @@ class LazifiedPDAP:
             x, global_valid = self.global_search(u, 1000, q_u, p_u)
             P_value = np.abs(p_u(x))[0]
             Phi_k = self.M * max((P_value - self.alpha), 0) + q_u
-            # logging.info(
-            #     f"{k}: Phi:{Phi_k:.3E}, support: {len(u.support)}, obj: {self.j(u):.12E}, x: {x}, support: {u.support}"
-            # )
-            # logging.info("==============================================")
+            if do_logging:
+                logging.info(
+                    f"{k}: Phi:{Phi_k:.3E}, support: {len(u.support)}, obj: {self.j(u):.12E}, x: {x}, support: {u.support}"
+                )
+                logging.info("==============================================")
             k += 1
             P_values.append(P_value)
             times.append(time.time() - initial_time)
@@ -590,17 +576,8 @@ class LazifiedPDAP:
         try:
             update_direction = np.linalg.solve(hess_j_z, -grad_j_z)
         except np.linalg.LinAlgError:
+            logging.warning("Newton update not possible")
             update_direction = np.zeros_like(grad_j_z)
-        if self.projection == "sphere":
-            # Project the newton solution onto tangent space
-            projection = np.eye(hess_j_z.shape[0])
-            for i, point in enumerate(points):
-                projection_part = np.eye(len(point)) - np.outer(point, point)
-                projection[
-                    i * len(point) : (i + 1) * len(point),
-                    i * len(point) : (i + 1) * len(point),
-                ] = projection_part
-            update_direction = projection @ update_direction
         # Transform vector into tuples
         coefs_new = coefs + nu * update_direction[-len(coefs) :]
         for i, point in enumerate(points):
@@ -651,6 +628,9 @@ class LazifiedPDAP:
         j_tilde_diff = self.j_tilde(points_new, coefs_new) - self.j_tilde(points, coefs)
         output_bools.append(j_tilde_diff <= -0.125 * self.m * norm_grad**2)
 
+        # if not output_bools[-1]:
+        #     logging.info(f"j_tilde_diff: {j_tilde_diff}, norm_grad: {norm_grad**2}")
+
         return output_bools
 
     def second_inequality(
@@ -672,6 +652,7 @@ class LazifiedPDAP:
         damping_root: float = 1,
         u_0: Measure = Measure(),
         Psi_0: float = 1,
+        do_logging: bool = True,
     ) -> tuple:
         epsilon = 0.5 * self.j(u_0) / self.M
         Psi_k = min(Psi_0, self.Psi_0)
@@ -702,6 +683,9 @@ class LazifiedPDAP:
             u_lm = u_ks * 1
 
             s = 0
+            # if len(u_ks.coefficients):
+            # e_vals = np.linalg.eigvals(self.hess_j(points, coefs))
+            # logging.info(f"min: {np.min(e_vals):.3E}, max: {np.max(e_vals):.3E}")
             while len(u_ks.coefficients):
                 # Inner loop
                 points_new, coefs_new = self.newton_step(
@@ -726,9 +710,10 @@ class LazifiedPDAP:
                     inner_loop.append(1)
                     objective_values.append(self.j(u_ks))
                     epsilons.append(epsilon_ks)
-                    # logging.info(
-                    #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
-                    # )
+                    if do_logging:
+                        logging.info(
+                            f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
+                        )
                     break
                 else:
                     optimal = False
@@ -740,10 +725,11 @@ class LazifiedPDAP:
                     inner_loop.append(1)
                     objective_values.append(self.j(u_ks_new))
                     epsilons.append(epsilon_ks)
-                    # logging.info(
-                    #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
-                    # )
-                    # logging.info(f"Inequality 6.7: {second_inequality}")
+                    if do_logging:
+                        logging.info(
+                            f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
+                        )
+                        logging.info(f"Inequality 6.7: {second_inequality}")
                     break
 
                 first_inequalities = self.first_inequalities(
@@ -756,10 +742,11 @@ class LazifiedPDAP:
                     inner_loop.append(1)
                     objective_values.append(self.j(u_ks_new))
                     epsilons.append(epsilon_ks)
-                    # logging.info(
-                    #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
-                    # )
-                    # logging.info(f"Inequalities 6.6: {first_inequalities}")
+                    if do_logging:
+                        logging.info(
+                            f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks_new.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks_new):.3E}"
+                        )
+                        logging.info(f"Inequalities 6.6: {first_inequalities}")
                     break
 
                 if s + 1 % drop_frequency == 0:
@@ -784,9 +771,10 @@ class LazifiedPDAP:
                 inner_loop.append(1)
                 objective_values.append(self.j(u_ks))
                 epsilons.append(epsilon_ks)
-                # logging.info(
-                #     f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
-                # )
+                if do_logging:
+                    logging.info(
+                        f"{k}, {s}: lazy: {global_valid}, support: {len(u_ks.support)}, epsilon: {epsilon_ks}, objective: {self.j(u_ks):.3E}"
+                    )
 
             if optimal:
                 u = u_ks * 1
@@ -807,7 +795,7 @@ class LazifiedPDAP:
             if len(u_gcg.coefficients):
                 u_drop, dropped = self.drop_step(u_gcg)
                 u_plus, finite_psi = self.finite_dimensional_step(
-                    u_drop, Psi_k, mode="positive"
+                    u_drop, Psi_k, do_logging, mode="positive"
                 )
                 dropped_tot += dropped
             else:
@@ -822,9 +810,10 @@ class LazifiedPDAP:
             inner_loop.append(0)
             objective_values.append(self.j(u))
             epsilons.append(epsilon)
-            # logging.info(
-            #     f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon:.3E}, objective: {self.j(u):.12E}, dropped: {dropped}"
-            # )
+            if do_logging:
+                logging.info(
+                    f"{k}: choice: {choice_index}, lazy: {global_valid}, support: {len(u.support)}, epsilon: {epsilon:.3E}, objective: {self.j(u):.12E}, dropped: {dropped}"
+                )
 
         self.M = self.j(self.u_0) / self.alpha
         logging.info(

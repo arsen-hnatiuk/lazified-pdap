@@ -302,7 +302,7 @@ def experiment():
     # PDAP
     logging.info(f"Computing PDAP solution")
     u_pdap, P_values_pdap, times_pdap, supports_pdap, objective_values_pdap = exp.pdap(
-        tol=1e-12
+        tol=1e-12, do_logging=False
     )
     logging.info("-------------------------------------------------------------------")
 
@@ -318,7 +318,7 @@ def experiment():
         objective_values_nlgcg,
         dropped_tot_nlgcg,
         epsilons_nlgcg,
-    ) = exp.newton(tol=1e-12, damped=False)
+    ) = exp.newton(tol=1e-12, damped=False, do_logging=False)
     intervals_nlgcg = compute_intervals(inner_loop_nlgcg)
     logging.info(f"Lazy LGCG steps: {lgcg_lazy_nlgcg}")
     logging.info(f"Total LGCG steps: {lgcg_total_nlgcg}")
@@ -335,7 +335,7 @@ def experiment():
         objective_values_lpdap,
         dropped_tot_lpdap,
         epsilons_lpdap,
-    ) = exp.lpdap(tol=1e-12)
+    ) = exp.lpdap(tol=1e-12, do_logging=False)
     logging.info("-------------------------------------------------------------------")
 
     optimum = (
@@ -390,7 +390,9 @@ def experiment():
 
         logging.info(f"Solving with FISTA on uniform grid of size {int(size**2)}")
         fista_exp = FISTA(K=K_transpose.T, alpha=alpha, target=target)
-        u_fista, objective_values_fista, times_fista = fista_exp.solve(max_time=60)
+        u_fista, objective_values_fista, times_fista = fista_exp.solve(
+            max_time=60, do_logging=False
+        )
         fista_solutions[size] = (u_fista, objective_values_fista - optimum, times_fista)
         logging.info(
             "-------------------------------------------------------------------"
@@ -402,7 +404,9 @@ def experiment():
         flpdap_exp = LazifiedPDAPFinite(
             K_transpose=K_transpose, alpha=alpha, target=target
         )
-        u_flpdap, objective_values_flpdap, times_flpdap = flpdap_exp.solve(tol=1e-10)
+        u_flpdap, objective_values_flpdap, times_flpdap = flpdap_exp.solve(
+            tol=1e-10, do_logging=False
+        )
         flpdap_solutions[size] = (
             u_flpdap,
             objective_values_flpdap - optimum,
@@ -419,15 +423,15 @@ def experiment():
     for size in sizes:
         u_flpdap, residuals_flpdap, times_flpdap = flpdap_solutions[size]
         logging.info(
-            f"Finite LPDAP on grid of size {size}: absolute residual {residuals_flpdap[-1]:.12E}, time {times_flpdap[-1]:.3f}s"
+            f"Finite LPDAP on grid of size {size**2}: absolute residual {residuals_flpdap[-1]:.12E}, time {times_flpdap[-1]:.3f}s"
         )
         u_sklearn, residual_sklearn, time_sklearn = sklearn_solutions_default[size]
         logging.info(
-            f"Scikit-learn default on grid of size {size}: absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap[-1]:.12E}, time {time_sklearn:.3f}s"
+            f"Scikit-learn default on grid of size {size**2}: absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap[-1]:.12E}, time {time_sklearn:.3f}s"
         )
         u_sklearn, residual_sklearn, time_sklearn = sklearn_solutions_custom[size]
         logging.info(
-            f"Scikit-learn custom on grid of size {size}: absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap[-1]:.12E}, time {time_sklearn:.3f}s"
+            f"Scikit-learn custom on grid of size {size**2}: absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap[-1]:.12E}, time {time_sklearn:.3f}s"
         )
 
     logging.getLogger().setLevel(logging.WARNING)  # Supress logging

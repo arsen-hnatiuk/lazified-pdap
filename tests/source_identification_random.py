@@ -35,7 +35,7 @@ sigma = 2e-3
 m = 1e-3
 bar_m = 1e-1
 L = 1
-R = 1e-2
+R = 5e-2
 
 
 def generate_function(true_sources: np.ndarray, true_weights: np.ndarray) -> tuple:
@@ -325,15 +325,102 @@ def bring_to_same_length(arrays):
     for arr in arrays:
         if len(arr) < max_length:
             last_val = arr[-1]
-            arr = arr + [last_val] * (max_length - len(arr))
-        new_arrays.append(arr)
+            arr = list(arr) + [last_val] * (max_length - len(arr))
+        new_arrays.append(np.array(arr))
     return new_arrays
+
+
+def plot_observations(true_measure: Measure, predicted_measure: Measure, iter: int):
+    # 2D problem with both true and predicted sources
+    logging.getLogger().setLevel(logging.WARNING)  # Supress logging
+    resolution = 100
+    a_1 = np.linspace(Omega[0][0], Omega[0][1], resolution, endpoint=False)
+    a_2 = np.linspace(Omega[1][0], Omega[1][1], resolution, endpoint=False)
+    x, y = np.meshgrid(a_1, a_2)
+    points = np.array(list(zip(x.flatten(), y.flatten())))
+
+    def plot_kernel(x):
+        # Input is 2D array of shape (number of points, Omega dimension)
+        if len(x.shape) == 1:
+            x = x.reshape(1, -1)
+        columns = []
+        outer_factor = np.sqrt(std_factor * np.pi) ** Omega.shape[0]
+        for point in points:
+            diff = point - x  # (len(x), Omega.shape[0])
+            norms = -np.square(np.linalg.norm(diff, axis=1)) / std_factor  # (len(x),)
+            exponentiated = np.exp(norms)  # (len(x),)
+            columns.append(exponentiated)
+        result = (
+            np.transpose(np.array(columns), axes=(1, 0)) / outer_factor
+        )  # shape=(len(x), len(observations))
+        return result
+
+    true_vals = true_measure.duality_pairing(plot_kernel).reshape((100, 100))
+    pred_vals = predicted_measure.duality_pairing(plot_kernel).reshape((100, 100))
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 4))
+    contour1 = ax1.contourf(x, y, true_vals, levels=100)
+    fig.colorbar(contour1, ax=ax1)
+    contour2 = ax2.contourf(x, y, pred_vals, levels=100)
+    fig.colorbar(contour2, ax=ax2)
+    contour3 = ax3.contourf(x, y, np.abs(pred_vals - true_vals), levels=100)
+    fig.colorbar(contour3, ax=ax3)
+    for i, x in enumerate(true_measure.support):
+        if true_measure.coefficients[i] < 0:
+            color = "b"
+        else:
+            color = "r"
+        ax1.plot([x[0]], [x[1]], "P", c=color, alpha=0.5)
+        ax1.add_patch(
+            plt.Circle(
+                (x[0], x[1]),
+                radius=true_measure.coefficients[i] / 10,
+                color=color,
+                fill=False,
+                alpha=0.5,
+            )
+        )
+        ax3.plot([x[0]], [x[1]], "P", c=color, alpha=0.5)
+
+    for i, x in enumerate(predicted_measure.support):
+        if predicted_measure.coefficients[i] < 0:
+            color = "b"
+        else:
+            color = "r"
+        ax2.plot([x[0]], [x[1]], "o", c=color, alpha=0.5)
+        ax2.add_patch(
+            plt.Circle(
+                (x[0], x[1]),
+                radius=predicted_measure.coefficients[i] / 10,
+                color=color,
+                fill=False,
+                alpha=0.5,
+            )
+        )
+        ax3.plot([x[0]], [x[1]], "o", c=color, alpha=0.5)
+
+    ax1.set_xlabel("True heat distribution")
+    ax2.set_xlabel("Predicted heat distribution")
+    ax3.set_xlabel("Absolute error in heat distribution")
+
+    ax1.set_xlim(Omega[0][0], Omega[0][1])
+    ax1.set_ylim(Omega[1][0], Omega[1][1])
+    ax2.set_xlim(Omega[0][0], Omega[0][1])
+    ax2.set_ylim(Omega[1][0], Omega[1][1])
+    ax3.set_xlim(Omega[0][0], Omega[0][1])
+    ax3.set_ylim(Omega[1][0], Omega[1][1])
+
+    plt.savefig(results_dir / f"heat_distribution_{iter}.png", bbox_inches="tight")
+    plt.close()
+
+    logging.getLogger().setLevel(logging.INFO)  # Reinstate logging
 
 
 def experiment():
     rng = np.random.default_rng(seed=42)
     loops = 5
-    resolution = 0.2
+    resolution = 0.1
+    source_nbr = 10
 
     all_times_pdap = []
     all_times_nlgcg = []
@@ -350,19 +437,23 @@ def experiment():
     all_flpdap_solutions = []
 
     for _ in range(loops):
+        logging.info("=" * 50)
         logging.info(f"Loop {_+1}")
 
         true_sources = []
-        while len(true_sources) < 10:
+        while len(true_sources) < source_nbr:
             point = sample_domain(1, Omega, rng).flatten()
             if not len(true_sources):
                 true_sources.append(point)
             elif not any(
-                np.linalg.norm(point - source) < 5 * R for source in true_sources
+                np.linalg.norm(point - source) < 4 * R for source in true_sources
+            ) and not any(
+                np.min([np.abs(poi - bound[0]), np.abs(poi - bound[1])]) < 2 * R
+                for poi, bound in zip(point, Omega)
             ):
                 true_sources.append(point)
         true_sources = np.array(true_sources)
-        true_weights_raw = sample_domain(10, np.array([[-1, 1]]), rng).flatten()
+        true_weights_raw = sample_domain(source_nbr, np.array([[-1, 1]]), rng).flatten()
         weight_signs = np.sign(true_weights_raw)
         true_weights = weight_signs * (np.sqrt(np.abs(true_weights_raw)))
         L_H = max(np.abs(true_weights))
@@ -404,14 +495,14 @@ def experiment():
             R=R,
         )
 
-        # # PDAP
-        # logging.info(f"Computing PDAP solution")
-        # u_pdap, P_values_pdap, times_pdap, supports_pdap, objective_values_pdap = (
-        #     exp.pdap(tol=1e-12)
-        # )
-        # logging.info(
-        #     "-------------------------------------------------------------------"
-        # )
+        # PDAP
+        logging.info(f"Computing PDAP solution")
+        u_pdap, P_values_pdap, times_pdap, supports_pdap, objective_values_pdap = (
+            exp.pdap(tol=1e-12, do_logging=False)
+        )
+        logging.info(
+            "-------------------------------------------------------------------"
+        )
 
         # NLPDAP
         logging.info(f"Computing NLPDAP solution")
@@ -425,7 +516,7 @@ def experiment():
             objective_values_nlgcg,
             dropped_tot_nlgcg,
             epsilons_nlgcg,
-        ) = exp.newton(tol=1e-12, damped=False)
+        ) = exp.newton(tol=1e-12, damped=False, do_logging=False)
         intervals_nlgcg = compute_intervals(inner_loop_nlgcg)
         logging.info(f"Lazy LGCG steps: {lgcg_lazy_nlgcg}")
         logging.info(f"Total LGCG steps: {lgcg_total_nlgcg}")
@@ -433,27 +524,31 @@ def experiment():
             "-------------------------------------------------------------------"
         )
 
-        # # LPDAP
-        # logging.info(f"Computing LPDAP solution")
-        # (
-        #     u_lpdap,
-        #     intermediate_u_lpdap,
-        #     Phi_ks_lpdap,
-        #     times_lpdap,
-        #     supports_lpdap,
-        #     objective_values_lpdap,
-        #     dropped_tot_lpdap,
-        #     epsilons_lpdap,
-        # ) = exp.lpdap(tol=1e-12)
-        # logging.info(
-        #     "-------------------------------------------------------------------"
-        # )
+        # LPDAP
+        logging.info(f"Computing LPDAP solution")
+        (
+            u_lpdap,
+            intermediate_u_lpdap,
+            Phi_ks_lpdap,
+            times_lpdap,
+            supports_lpdap,
+            objective_values_lpdap,
+            dropped_tot_lpdap,
+            epsilons_lpdap,
+        ) = exp.lpdap(tol=1e-12, do_logging=False)
+        logging.info(
+            "-------------------------------------------------------------------"
+        )
+
+        plot_observations(
+            Measure(support=true_sources, coefficients=true_weights), u_nlgcg, _ + 1
+        )
 
         optimum = (
             min(
                 [
-                    # objective_values_pdap[-1],
-                    # objective_values_lpdap[-1],
+                    objective_values_pdap[-1],
+                    objective_values_lpdap[-1],
                     objective_values_nlgcg[-1],
                 ]
             )
@@ -469,53 +564,55 @@ def experiment():
             grid = get_grid(size)
             K_transpose = kernel(grid)
 
-            # logging.info(
-            #     f"Solving with scikit-learn on uniform grid of size {int(size**2)} with default parameters"
-            # )
-            # sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
-            # u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve()
-            # sklearn_solutions_default[size] = (
-            #     u_sklearn,
-            #     objective_value_sklearn - optimum,
-            #     time_sklearn,
-            # )
-            # logging.info(
-            #     "-------------------------------------------------------------------"
-            # )
+            logging.info(
+                f"Solving with scikit-learn on uniform grid of size {int(size**2)} with default parameters"
+            )
+            sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
+            u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve()
+            sklearn_solutions_default[size] = (
+                u_sklearn,
+                objective_value_sklearn - optimum,
+                time_sklearn,
+            )
+            logging.info(
+                "-------------------------------------------------------------------"
+            )
 
-            # logging.info(
-            #     f"Solving with scikit-learn on uniform grid of size {int(size**2)} with tol=1e-6, max_iter=10000"
-            # )
-            # sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
-            # u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve(
-            #     tol=1e-6, max_iter=10000
-            # )
-            # sklearn_solutions_custom[size] = (
-            #     u_sklearn,
-            #     objective_value_sklearn - optimum,
-            #     time_sklearn,
-            # )
-            # logging.info(
-            #     "-------------------------------------------------------------------"
-            # )
+            logging.info(
+                f"Solving with scikit-learn on uniform grid of size {int(size**2)} with tol=1e-6, max_iter=10000"
+            )
+            sklearn_exp = SKLEARN(K=K_transpose.T, alpha=alpha, target=target)
+            u_sklearn, objective_value_sklearn, time_sklearn = sklearn_exp.solve(
+                tol=1e-6, max_iter=10000
+            )
+            sklearn_solutions_custom[size] = (
+                u_sklearn,
+                objective_value_sklearn - optimum,
+                time_sklearn,
+            )
+            logging.info(
+                "-------------------------------------------------------------------"
+            )
 
-            # logging.info(f"Solving with FISTA on uniform grid of size {int(size**2)}")
-            # fista_exp = FISTA(K=K_transpose.T, alpha=alpha, target=target)
-            # u_fista, objective_values_fista, times_fista = fista_exp.solve(max_time=300)
-            # fista_solutions[size] = (
-            #     u_fista,
-            #     adapt_time(
-            #         times_fista,
-            #         objective_values_fista - optimum,
-            #         frame=300,
-            #         resolution=resolution,
-            #     ),
-            #     times_fista,
-            #     objective_values_fista - optimum,
-            # )
-            # logging.info(
-            #     "-------------------------------------------------------------------"
-            # )
+            logging.info(f"Solving with FISTA on uniform grid of size {int(size**2)}")
+            fista_exp = FISTA(K=K_transpose.T, alpha=alpha, target=target)
+            u_fista, objective_values_fista, times_fista = fista_exp.solve(
+                max_time=300, do_logging=False
+            )
+            fista_solutions[size] = (
+                u_fista,
+                adapt_time(
+                    times_fista,
+                    objective_values_fista - optimum,
+                    frame=300,
+                    resolution=resolution,
+                ),
+                times_fista,
+                objective_values_fista - optimum,
+            )
+            logging.info(
+                "-------------------------------------------------------------------"
+            )
 
             logging.info(
                 f"Solving with finite LPDAP on uniform grid of size {int(size**2)}"
@@ -524,7 +621,7 @@ def experiment():
                 K_transpose=K_transpose, alpha=alpha, target=target
             )
             u_flpdap, objective_values_flpdap, times_flpdap = flpdap_exp.solve(
-                tol=1e-10
+                tol=1e-10, do_logging=False
             )
             flpdap_solutions[size] = (
                 u_flpdap,
@@ -542,9 +639,9 @@ def experiment():
             )
 
         all_sklearn_solutions_default.append(sklearn_solutions_default)
-        all_sklearn_solutions_custom.append(all_sklearn_solutions_custom)
-        all_fista_solutions.append(all_fista_solutions)
-        all_flpdap_solutions.append(all_flpdap_solutions)
+        all_sklearn_solutions_custom.append(sklearn_solutions_custom)
+        all_fista_solutions.append(fista_solutions)
+        all_flpdap_solutions.append(flpdap_solutions)
         all_times_pdap.append(times_pdap)
         all_times_nlgcg.append(times_nlgcg)
         all_times_lpdap.append(times_lpdap)
@@ -577,20 +674,20 @@ def experiment():
         all_supp_lpdap.append(supports_lpdap)
 
     for size in sizes:
-        residuals_flpdap = np.mean([d[size][1][-1] for d in all_flpdap_solutions])
-        times_flpdap = np.mean([d[size][2][-1] for d in all_flpdap_solutions])
+        residual_flpdap = np.mean([d[size][1][-1] for d in all_flpdap_solutions])
+        time_flpdap = np.mean([d[size][2][-1] for d in all_flpdap_solutions])
         logging.info(
-            f"Finite LPDAP on grid of size {size}: mean absolute residual {residuals_flpdap:.12E}, mean time {times_flpdap:.3f}s"
+            f"Finite LPDAP on grid of size {size**2}: mean absolute residual {residual_flpdap:.12E}, mean time {time_flpdap:.3f}s"
         )
         residual_sklearn = np.mean([d[size][1] for d in all_sklearn_solutions_default])
         time_sklearn = np.mean([d[size][2] for d in all_sklearn_solutions_default])
         logging.info(
-            f"Scikit-learn default on grid of size {size}: mean absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap:.12E}, time {time_sklearn:.3f}s"
+            f"Scikit-learn default on grid of size {size**2}: mean absolute residual {residual_sklearn:.12E}, mean grid residual {residual_sklearn - residual_flpdap:.12E}, mean time {time_sklearn:.3f}s"
         )
         residual_sklearn = np.mean([d[size][1] for d in all_sklearn_solutions_custom])
         time_sklearn = np.mean([d[size][2] for d in all_sklearn_solutions_custom])
         logging.info(
-            f"Scikit-learn custom on grid of size {size}: absolute residual {residual_sklearn:.12E}, grid residual {residual_sklearn - residuals_flpdap:.12E}, time {time_sklearn:.3f}s"
+            f"Scikit-learn custom on grid of size {size**2}: mean absolute residual {residual_sklearn:.12E}, mean grid residual {residual_sklearn - residual_flpdap:.12E}, mean time {time_sklearn:.3f}s"
         )
 
     pdap_residuals_mean = np.mean(bring_to_same_length(all_res_pdap), axis=0)
@@ -619,46 +716,6 @@ def experiment():
     )
 
     logging.getLogger().setLevel(logging.WARNING)  # Supress logging
-
-    # # Plot dual variable
-    # u_tilde = u_nlgcg
-    # p_u = p(u_tilde)
-    # P = lambda x: np.abs(p_u(x))
-    # a = np.arange(0, 1, 0.01)
-    # B, D = np.meshgrid(a, a)
-    # vals = np.array(
-    #     [P(np.array([x_1, x_2])) for x_1, x_2 in zip(B.flatten(), D.flatten())]
-    # ).reshape((100, 100))
-    # plt.contourf(B, D, vals, levels=100)
-    # plt.colorbar()
-    # for i, x in enumerate(true_sources):
-    #     if i:
-    #         plt.plot([x[0]], [x[1]], "P", c="r", markersize=10)
-    #     else:
-    #         plt.plot([x[0]], [x[1]], "P", c="r", markersize=10, label="True sources")
-    # for i, x in enumerate(u_tilde.support):
-    #     if i:
-    #         plt.plot([x[0]], [x[1]], "o", c="b")
-    #     else:
-    #         plt.plot([x[0]], [x[1]], "o", c="b", label="Optimal support")
-    # plt.legend()
-    # plt.savefig(results_dir / "optimal_dual_certificate.png", bbox_inches="tight")
-    # plt.close()
-
-    # # Plot residuals
-    # names = ["PDAP", "LPDAP", "NLGCG"]
-    # styles = ["-", "--", "-."]
-    # plt.figure(figsize=(11.25, 5))
-    # for array, name, style in zip(
-    #     [residuals_pdap, residuals_lpdap, residuals_nlgcg], names, styles
-    # ):
-    #     plt.semilogy(np.array(range(len(array))), array, style, label=name)
-    # plt.ylabel("Objective residual")
-    # plt.xlabel("Total iterations")
-    # plt.ylim(1e-12, 30)
-    # plt.legend()
-    # plt.savefig(results_dir / "res_iter.png", bbox_inches="tight")
-    # plt.close()
 
     # Plot supports
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -761,10 +818,10 @@ def experiment():
     ]
     residuals_fista_ste = [
         np.std(bring_to_same_length([d[size][1] for d in all_fista_solutions]), axis=0)
-        / np.dqrt(loops)
+        / np.sqrt(loops)
         for size in sizes
     ]
-    plt.figure(figsize=(11.25, 5))
+    fig, ax = plt.subplots(figsize=(11.25, 5))
     for array, array_ste, name, style, color in zip(
         residuals_fista_mean + residuals_flpdap_mean + [lpdap_residuals_mean],
         residuals_fista_ste + residuals_flpdap_ste + [lpdap_residuals_ste],
@@ -772,7 +829,7 @@ def experiment():
         styles,
         colors,
     ):
-        plt.loglog(
+        ax.loglog(
             np.arange(len(array)) * resolution, array, style, label=name, color=color
         )
         ax.fill(
@@ -797,7 +854,7 @@ def experiment():
     plt.ylabel("Objective residual")
     plt.xlabel("Time (s)")
     plt.ylim(1e-10, 100)
-    plt.legend()
+    ax.legend()
     plt.savefig(results_dir / "grid_res_time.png", bbox_inches="tight")
     plt.close()
 
@@ -826,10 +883,10 @@ def experiment():
     ]
     residuals_fista_ste = [
         np.std(bring_to_same_length([d[size][3] for d in all_fista_solutions]), axis=0)
-        / np.dqrt(loops)
+        / np.sqrt(loops)
         for size in sizes
     ]
-    plt.figure(figsize=(11.25, 5))
+    fig, ax = plt.subplots(figsize=(11.25, 5))
     for array, array_ste, name, style, color in zip(
         residuals_fista_mean + residuals_flpdap_mean + [lpdap_residuals_mean],
         residuals_fista_ste + residuals_flpdap_ste + [lpdap_residuals_ste],
@@ -837,12 +894,12 @@ def experiment():
         styles,
         colors,
     ):
-        plt.loglog(np.arange(len(array)), array, style, label=name, color=color)
+        ax.loglog(np.arange(len(array)), array, style, label=name, color=color)
         ax.fill(
             np.hstack(
                 (
-                    np.arange(len(array)) * resolution,
-                    np.arange(len(array))[::-1] * resolution,
+                    np.arange(len(array)),
+                    np.arange(len(array))[::-1],
                 )
             ),
             np.hstack(
@@ -861,7 +918,7 @@ def experiment():
     plt.xlabel("Iterations")
     plt.ylim(1e-10, 100)
     # plt.xlim(0, 100)
-    plt.legend()
+    ax.legend()
     plt.savefig(results_dir / "grid_res_iter.png", bbox_inches="tight")
     plt.close()
 

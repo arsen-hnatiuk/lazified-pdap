@@ -34,7 +34,7 @@ class FISTA:
         )
         return to_return
 
-    def solve(self, max_time: int = 1000):
+    def solve(self, max_time: int = 1000, do_logging: bool = True):
         time_0 = time.time()
         u = np.zeros(self.K.shape[1])
         q = u.copy()  # intermediate iterate
@@ -51,8 +51,8 @@ class FISTA:
             obj = self.j(u)
             times.append(time.time() - time_0)
             objectives.append(obj)
-            # if k % 1000 == 0:
-            #     logging.info(f"{k}: objective: {obj:.14E}")
+            if k % 1000 == 0 and do_logging:
+                logging.info(f"{k}: objective: {obj:.14E}")
             if np.std(objectives[-10:]) < 1e-12:
                 break
             k += 1

@@ -45,16 +45,14 @@ class LazifiedPDAPFinite:
             - u.duality_pairing(p_u)
         )
 
-    def finite_dimensional_step(self, u_plus: Measure, Psi: float) -> Measure:
+    def finite_dimensional_step(
+        self, u_plus: Measure, Psi: float, do_logging: bool
+    ) -> Measure:
         if not len(u_plus.coefficients):
             return u_plus
         K_support = self.K_transpose[u_plus.support.flatten()].T
         ssn = SSN(K=K_support, alpha=self.alpha, target=self.target, M=self.M)
-        u_raw = ssn.solve(tol=Psi, u_0=u_plus.coefficients)
-        if ssn.Psi(u_raw) > Psi:
-            logging.info(ssn.Psi(u_raw))
-            sklearn = SKLEARN(K=K_support, alpha=self.alpha, target=self.target)
-            u_raw = sklearn.solve(tol=self.machine_precision)[0]
+        u_raw = ssn.solve(tol=Psi, u_0=u_plus.coefficients, do_logging=do_logging)
         u_raw[np.abs(u_raw) < self.machine_precision] = 0
         # Reconstruct u
         u = Measure(
@@ -63,7 +61,7 @@ class LazifiedPDAPFinite:
         )
         return u
 
-    def solve(self, tol: float) -> dict:
+    def solve(self, tol: float, do_logging: bool = True) -> dict:
         u = self.u_0 * 1
         residuum_u = self.residuum(u)
         p_u = -self.K_transpose @ residuum_u
@@ -84,16 +82,17 @@ class LazifiedPDAPFinite:
             eta = max(min(1, Phi_value / self.C), 10 * self.machine_precision)
             u = u * (1 - eta) + v_k * eta
 
-            u = self.finite_dimensional_step(u, Psi)
+            u = self.finite_dimensional_step(u, Psi, do_logging)
             residuum_u = self.residuum(u)
             p_u = -self.K_transpose @ residuum_u
             x = np.argmax(np.abs(p_u))
             Phi_value = self.Phi(p_u, u, x)
             self.M = self.j(u) / self.alpha
 
-            logging.info(
-                f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {u.support}, Psi {Psi:.3E}, x: {x}"
-            )
+            if do_logging:
+                logging.info(
+                    f"{k}: Phi {Phi_value:.3E}, epsilon {epsilon:.3E}, support {u.support}, Psi {Psi:.3E}, x: {x}"
+                )
             objectives.append(self.j(u))
             times.append(time.time() - start_time)
             k += 1
@@ -102,7 +101,7 @@ class LazifiedPDAPFinite:
         )
         return u, objectives, times
 
-    def solve_exact(self, tol: float) -> dict:
+    def solve_exact(self, tol: float, do_logging: True) -> dict:
         u = self.u_0 * 1
         residuum_u = self.residuum(u)
         p_u = -self.K_transpose @ residuum_u
@@ -116,14 +115,15 @@ class LazifiedPDAPFinite:
             eta = max(min(1, Phi_value / self.C), 10 * self.machine_precision)
             v_k = Measure(support=[[x]], coefficients=[self.M * np.sign(p_u[x])])
             u_plus = u * (1 - eta) + v_k * eta
-            u = self.finite_dimensional_step(u_plus, self.machine_precision)
+            u = self.finite_dimensional_step(u_plus, self.machine_precision, do_logging)
             residuum_u = self.residuum(u)
             p_u = -self.K_transpose @ residuum_u
             x = np.argmax(np.abs(p_u))
             Phi_value = self.Phi(p_u, u, x)
             self.M = self.j(u) / self.alpha
 
-            # logging.info(f"{k}: Phi {Phi_value:.3E}, support {len(u.support)}")
+            if do_logging:
+                logging.info(f"{k}: Phi {Phi_value:.3E}, support {len(u.support)}")
             objectives.append(self.j(u))
             times.append(time.time() - start_time)
             k += 1
