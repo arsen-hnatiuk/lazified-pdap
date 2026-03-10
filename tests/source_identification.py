@@ -391,7 +391,7 @@ def experiment():
         logging.info(f"Solving with FISTA on uniform grid of size {int(size**2)}")
         fista_exp = FISTA(K=K_transpose.T, alpha=alpha, target=target)
         u_fista, objective_values_fista, times_fista = fista_exp.solve(
-            max_time=60, do_logging=False
+            max_time=100, do_logging=False
         )
         fista_solutions[size] = (u_fista, objective_values_fista - optimum, times_fista)
         logging.info(
@@ -494,7 +494,7 @@ def experiment():
     # Plot residuals
     names = ["PDAP", "LPDAP", "NLGCG"]
     styles = ["-", "--", "-."]
-    plt.figure(figsize=(11.25, 5))
+    plt.figure(figsize=(5, 4))
     for array, name, style in zip(
         [residuals_pdap, residuals_lpdap, residuals_nlgcg], names, styles
     ):
@@ -510,7 +510,7 @@ def experiment():
     names = ["LPDAP", "NLGCG"]
     styles = ["--", "-."]
     colors = ["orange", "green"]
-    plt.figure(figsize=(11.25, 5))
+    plt.figure(figsize=(5, 4))
     for array, name, style, color in zip(
         [epsilons_lpdap, epsilons_nlgcg], names, styles, colors
     ):
@@ -525,7 +525,7 @@ def experiment():
     # Plot supports
     names = ["PDAP", "LPDAP", "NLGCG"]
     styles = ["-", "--", "-."]
-    plt.figure(figsize=(11.25, 5))
+    plt.figure(figsize=(5, 4))
     for array, name, style in zip(
         [supports_pdap, supports_lpdap, supports_nlgcg], names, styles
     ):
@@ -539,7 +539,7 @@ def experiment():
     # Plot residuals in time
     names = ["PDAP", "LPDAP", "NLGCG"]
     styles = ["-", "--", "-.", ":"]
-    plt.figure(figsize=(11.25, 5))
+    plt.figure(figsize=(5, 4))
     for domain, array, name, style in zip(
         [times_pdap, times_lpdap, times_nlgcg],
         [residuals_pdap, residuals_lpdap, residuals_nlgcg],
@@ -556,9 +556,9 @@ def experiment():
 
     # Plot FLPDAP vs FISTA residuals on grid in time
     names = (
-        [f"FISTA, mesh {Omega_size/size}" for size in sizes]
-        + [f"Finite LPDPA, mesh {Omega_size/size}" for size in sizes]
-        + [f"LPDAP, mesh {0}"]
+        [f"FISTA, {size}x{size} grid" for size in sizes]
+        + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
+        + [f"LPDAP, gridless"]
     )
     colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
@@ -566,7 +566,7 @@ def experiment():
     times_flpdap = [tim for _, _, tim in flpdap_solutions.values()]
     residuals_fista = [res for _, res, _ in fista_solutions.values()]
     times_fista = [tim for _, _, tim in fista_solutions.values()]
-    plt.figure(figsize=(11.25, 5))
+    plt.figure(figsize=(10, 4))
     for domain, array, name, style, color in zip(
         times_fista + times_flpdap + [times_lpdap],
         residuals_fista + residuals_flpdap + [residuals_lpdap],
@@ -584,15 +584,15 @@ def experiment():
 
     # Plot FLPDAP vs FISTA residuals on grid in iters
     names = (
-        [f"FISTA, mesh {Omega_size/size}" for size in sizes]
-        + [f"Finite LPDPA, mesh {Omega_size/size}" for size in sizes]
-        + [f"LPDAP, mesh {0}"]
+        [f"FISTA, {size}x{size} grid" for size in sizes]
+        + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
+        + [f"LPDAP, gridless"]
     )
     colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
     residuals_flpdap = [res for _, res, _ in flpdap_solutions.values()]
     residuals_fista = [res for _, res, _ in fista_solutions.values()]
-    plt.figure(figsize=(11.25, 5))
+    plt.figure(figsize=(10, 4))
     for domain, array, name, style, color in zip(
         [
             np.arange(len(ar))
@@ -613,7 +613,7 @@ def experiment():
     plt.close()
 
     # Plot inner loop
-    plt.figure(figsize=(11.25, 5))
+    plt.figure(figsize=(10, 4))
     plt.semilogy(
         np.array(range(len(residuals_nlgcg))),
         residuals_nlgcg,

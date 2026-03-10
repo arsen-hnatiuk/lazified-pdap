@@ -718,7 +718,7 @@ def experiment():
     logging.getLogger().setLevel(logging.WARNING)  # Supress logging
 
     # Plot supports
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(5, 4))
     names = ["PDAP", "LPDAP", "NLGCG"]
     styles = ["-", "--", "-."]
     colors = ["blue", "orange", "green"]
@@ -753,7 +753,7 @@ def experiment():
     plt.close()
 
     # Plot residuals in time
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(5, 4))
     names = ["PDAP", "LPDAP", "NLGCG"]
     styles = ["-", "-.", "--"]
     colors = ["blue", "orange", "green"]
@@ -795,9 +795,9 @@ def experiment():
 
     # Plot FLPDAP vs FISTA residuals on grid in time
     names = (
-        [f"FISTA, mesh {Omega_size/size}" for size in sizes]
-        + [f"Finite LPDPA, mesh {Omega_size/size}" for size in sizes]
-        + [f"LPDAP, mesh {0}"]
+        [f"FISTA, {size}x{size} grid" for size in sizes]
+        + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
+        + [f"LPDAP, gridless"]
     )
     colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
@@ -821,7 +821,7 @@ def experiment():
         / np.sqrt(loops)
         for size in sizes
     ]
-    fig, ax = plt.subplots(figsize=(11.25, 5))
+    fig, ax = plt.subplots(figsize=(10, 4))
     for array, array_ste, name, style, color in zip(
         residuals_fista_mean + residuals_flpdap_mean + [lpdap_residuals_mean],
         residuals_fista_ste + residuals_flpdap_ste + [lpdap_residuals_ste],
@@ -860,9 +860,9 @@ def experiment():
 
     # Plot FLPDAP vs FISTA residuals on grid in iters
     names = (
-        [f"FISTA, mesh {Omega_size/size}" for size in sizes]
-        + [f"Finite LPDPA, mesh {Omega_size/size}" for size in sizes]
-        + [f"LPDAP, mesh {0}"]
+        [f"FISTA, {size}x{size} grid" for size in sizes]
+        + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
+        + [f"LPDAP, gridless"]
     )
     colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
@@ -886,7 +886,7 @@ def experiment():
         / np.sqrt(loops)
         for size in sizes
     ]
-    fig, ax = plt.subplots(figsize=(11.25, 5))
+    fig, ax = plt.subplots(figsize=(10, 4))
     for array, array_ste, name, style, color in zip(
         residuals_fista_mean + residuals_flpdap_mean + [lpdap_residuals_mean],
         residuals_fista_ste + residuals_flpdap_ste + [lpdap_residuals_ste],
