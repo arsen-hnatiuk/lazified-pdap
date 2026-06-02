@@ -1,0 +1,68 @@
+from sklearn.linear_model import Lasso
+import numpy as np
+import time
+import logging
+from lib.default_values import *
+
+logging.basicConfig(
+    level=logging.DEBUG,
+)
+
+
+class SKLEARN:
+    def __init__(
+        self,
+        K: np.ndarray,
+        alpha: float,
+        target: np.ndarray,
+    ) -> None:
+        self.K_raw = K
+        if all(self.K_raw.shape):
+            self.K = self.K_raw
+            self.machine_precision = 1e-12
+            self.target = target
+            self.alpha = alpha / self.K.shape[0]
+            self.g = get_default_g(alpha)
+            self.f = get_default_f(self.K_raw, self.target)
+            self.j = lambda u: self.f(u) + self.g(u)
+
+    def solve(self, tol: float = 1e-4, max_iter: int = 1000) -> np.ndarray:
+        t_0 = time.time()
+        model = Lasso(
+            alpha=self.alpha,
+            fit_intercept=False,
+            tol=tol,
+            max_iter=max_iter,
+        )
+        model.fit(self.K, self.target)
+        u = model.coef_
+        obj = self.j(u)
+        logging.debug(
+            f"Scikit-learn in {self.K.shape[1]} dimensions converged to objective {obj:.12E}"
+        )
+        return u, obj, time.time() - t_0
+
+    def solve_experiment(self, tol: float):
+        time_0 = time.time()
+        u = np.zeros(self.K.shape[1])
+        times = [time.time() - time_0]
+        objectives = [self.j(u)]
+        k = 0
+        while 10**k >= tol - self.machine_precision:
+            model = Lasso(
+                alpha=self.alpha,
+                fit_intercept=False,
+                tol=10**k,
+                warm_start=True,
+                max_iter=10000,
+            )
+            model.coef_ = u
+            model.fit(self.K, self.target)
+            u = model.coef_
+            k -= 1
+            times.append(time.time() - time_0)
+            objectives.append(self.j(u))
+            logging.debug(
+                f"Scikit-learn in {self.K.shape[1]} dimensions converged to tolerance {10**k:.3E}"
+            )
+        return u, objectives, times

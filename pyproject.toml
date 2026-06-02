@@ -1,7 +1,7 @@
 [project]
-name = "lazified-generalized-conditional-gradient"
-version = "2024.0.0"
-requires-python = ">=3.10"
+name = "lazified-pdap"
+version = "2026.0.0"
+requires-python = ">=3.11"
 authors = [{ name = "Arsen Hnatiuk", email = "arsen.hnatiuk@hu-berlin.de" }]
 readme = "README.md"
 dynamic = ["dependencies"]

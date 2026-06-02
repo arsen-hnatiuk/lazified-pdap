@@ -8,3 +8,10 @@ To create a conda environment with the required dependencies, run the command
 conda create --name lpdap_env --file requirements.txt
 conda activate lpdap_env
 ```
+
+To reproduce the experiments, run
+```
+python tests/source_identification.py
+python tests/source_identification_random.py
+python tests/signal_processing.py
+```
