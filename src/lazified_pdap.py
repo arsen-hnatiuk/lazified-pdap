@@ -628,9 +628,6 @@ class LazifiedPDAP:
         j_tilde_diff = self.j_tilde(points_new, coefs_new) - self.j_tilde(points, coefs)
         output_bools.append(j_tilde_diff <= -0.125 * self.m * norm_grad**2)
 
-        # if not output_bools[-1]:
-        #     logging.info(f"j_tilde_diff: {j_tilde_diff}, norm_grad: {norm_grad**2}")
-
         return output_bools
 
     def second_inequality(
@@ -683,9 +680,6 @@ class LazifiedPDAP:
             u_lm = u_ks * 1
 
             s = 0
-            # if len(u_ks.coefficients):
-            # e_vals = np.linalg.eigvals(self.hess_j(points, coefs))
-            # logging.info(f"min: {np.min(e_vals):.3E}, max: {np.max(e_vals):.3E}")
             while len(u_ks.coefficients):
                 # Inner loop
                 points_new, coefs_new = self.newton_step(

@@ -216,52 +216,6 @@ def get_grid(size: int) -> np.ndarray:
     return grid
 
 
-# def test():
-#     size = 10000
-#     grid = get_grid(size)
-#     K = kernel(grid).T
-#     u_0 = np.zeros(K.shape[1])
-#     j = lambda u: 0.5 * np.linalg.norm(K @ u - target) ** 2 + alpha * np.linalg.norm(
-#         u, ord=1
-#     )
-#     M = j(u_0) / alpha
-
-#     logging.info(f"Solving with SSN on uniform grid of size {size}")
-#     ssn_exp = SSN(K=K, alpha=alpha, target=target, M=M, mode="unconstrained")
-#     u_ssn, objectives_ssn, times_ssn = ssn_exp.solve_experiment(tol=1e-10)
-#     obj_ssn = j(u_ssn)
-#     logging.info(objectives_ssn)
-#     logging.info(times_ssn)
-
-#     logging.info(f"Solving with CVXPY on uniform grid of size {size}")
-#     cvxpy_exp = CVXPY(K=K, alpha=alpha, target=target)
-#     u_cvxpy, objectives_cvxpy, times_cvxpy = cvxpy_exp.solve_experiment(tol=1e-10)
-#     obj_cvxpy = j(u_cvxpy)
-#     logging.info(objectives_cvxpy)
-#     logging.info(times_cvxpy)
-
-#     logging.info(f"Solving with scikit-learn on uniform grid of size {size}")
-#     sklearn_exp = SKLEARN(K=K, alpha=alpha, target=target)
-#     u_sklearn, objectives_sklearn, times_sklearn = sklearn_exp.solve_experiment(
-#         tol=1e-10
-#     )
-#     obj_sklearn = j(u_sklearn)
-#     logging.info(objectives_sklearn)
-#     logging.info(times_sklearn)
-
-#     logging.info(f"Solving with scikit-learn on uniform grid of size {size}")
-#     sklearn_exp = SKLEARN(K=K, alpha=alpha, target=target)
-#     u_sklearn = sklearn_exp.solve()
-#     obj_sklearn = j(u_sklearn)
-#     logging.info(obj_sklearn)
-
-#     logging.info(f"Solving with FISTA on uniform grid of size {size}")
-#     fista_exp = FISTA(K=K, alpha=alpha, target=target)
-#     u_fista, objectives_fista, times_fista = fista_exp.solve(max_iter=100000)
-#     obj_fista = j(u_fista)
-#     logging.info(obj_fista)
-
-
 def experiment():
     exp = LazifiedPDAP(
         target=target,
@@ -583,44 +537,6 @@ def experiment():
     plt.legend()
     plt.savefig(results_dir / "grid_res_iter.png", bbox_inches="tight")
     plt.close()
-
-    # # Plot NLGCG vs grid residuals in time
-    # point_labels = [f"mesh {Omega_size/size}" for size in sizes]
-    # plt.figure(figsize=(11.25, 5))
-    # plt.loglog(
-    #     times_pdap_grid, objectives_pdap_grid, marker="o", label="PDAP", color="green"
-    # )
-    # plt.loglog(
-    #     times_sklearn,
-    #     objectives_sklearn,
-    #     marker="o",
-    #     label="scikit-learn",
-    #     color="blue",
-    # )
-    # for xi, yi, label in zip(times_pdap_grid, objectives_pdap_grid, point_labels):
-    #     plt.annotate(
-    #         label,
-    #         (xi, yi),
-    #         textcoords="offset points",
-    #         xytext=(8, 8),
-    #         ha="left",
-    #         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=1),
-    #     )
-    # for xi, yi, label in zip(times_sklearn, objectives_sklearn, point_labels):
-    #     plt.annotate(
-    #         label,
-    #         (xi, yi),
-    #         textcoords="offset points",
-    #         xytext=(8, 8),
-    #         ha="left",
-    #         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=1),
-    #     )
-    # plt.ylabel("Objective residual")
-    # plt.xlabel("Time (s)")
-    # # plt.ylim(1e-12, 55)
-    # plt.legend()
-    # plt.savefig(results_dir / "grid_res_time.png", bbox_inches="tight")
-    # plt.close()
 
     # Plot inner loop
     plt.figure(figsize=(10, 4))

@@ -131,11 +131,3 @@ class SSN:
             times.append(time.time() - time_0)
             objectives.append(self.j(u))
         return u, objectives, times
-
-
-# if __name__ == "__main__":
-#     K = np.array([[-1, 2, 0], [3, 0, 0], [-1, -2, -1]])
-#     u = np.array([-1, -1, -1])
-#     y = np.array([1, 0, 4])
-#     sn = SSN_POSITIVE(K, 1, y, 20)
-#     print(sn.solve(1e-12, u))
