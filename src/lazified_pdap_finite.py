@@ -12,7 +12,7 @@ logging.basicConfig(
 
 
 class LazifiedPDAPFinite:
-    # An implementation of the LGCG algorithm for finite Omega
+    # An implementation of the LPDAP algorithm for finite Omega
 
     def __init__(
         self,

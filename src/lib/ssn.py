@@ -15,8 +15,7 @@ class SSN:
         alpha: float,
         target: np.ndarray,
         M: float,
-        mode: str = "unconstrained",
-        # mode: "unconstrained" for unconstrained, else for positive solutions
+        mode: str = "unconstrained",  # "unconstrained" for unconstrained, else for positive solutions
     ) -> None:
         self.K = K
         if all(self.K.shape):

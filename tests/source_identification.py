@@ -449,7 +449,6 @@ def experiment():
     plt.plot(0, 0, "o", c="b", markersize=10, label="Clustered support")
     # Point for legend
     plt.plot(0, 0, "o", c="r", fillstyle="none", markersize=10, label="Optimal support")
-    # Point for legend
     for x, c in zip(clustered_points, clustered_weights):
         plt.plot(x[0], x[1], "o", c="b", markersize=25 * c)
     plt.plot(
