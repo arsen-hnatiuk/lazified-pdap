@@ -508,7 +508,7 @@ def experiment():
     # Plot lazy thresholds
     names = ["LPDAP", "NLGCG"]
     styles = ["--", "-."]
-    colors = ["orange", "green"]
+    colors = ["tab:orange", "tab:green"]
     plt.figure(figsize=(5, 4))
     for array, name, style, color in zip(
         [epsilons_lpdap, epsilons_nlgcg], names, styles, colors
@@ -559,7 +559,7 @@ def experiment():
         + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
         + [f"LPDAP, gridless"]
     )
-    colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
+    colors = ["tab:blue"] * len(sizes) + ["tab:green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
     residuals_flpdap = [res for _, res, _ in flpdap_solutions.values()]
     times_flpdap = [tim for _, _, tim in flpdap_solutions.values()]
@@ -587,7 +587,7 @@ def experiment():
         + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
         + [f"LPDAP, gridless"]
     )
-    colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
+    colors = ["tab:blue"] * len(sizes) + ["tab:green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
     residuals_flpdap = [res for _, res, _ in flpdap_solutions.values()]
     residuals_fista = [res for _, res, _ in fista_solutions.values()]
@@ -617,7 +617,7 @@ def experiment():
         np.array(range(len(residuals_nlgcg))),
         residuals_nlgcg,
         linestyle="-.",
-        color="green",
+        color="tab:green",
         label="Objective residual",
     )
     plt.semilogy(

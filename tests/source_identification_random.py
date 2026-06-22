@@ -721,7 +721,7 @@ def experiment():
     fig, ax = plt.subplots(figsize=(5, 4))
     names = ["PDAP", "LPDAP", "NLGCG"]
     styles = ["-", "--", "-."]
-    colors = ["blue", "orange", "green"]
+    colors = ["tab:blue", "tab:orange", "tab:green"]
     for array, array_ste, name, style, color in zip(
         [pdap_supports_mean, lpdap_supports_mean, nlgcg_supports_mean],
         [pdap_supports_ste, lpdap_supports_ste, nlgcg_supports_ste],
@@ -756,7 +756,7 @@ def experiment():
     fig, ax = plt.subplots(figsize=(5, 4))
     names = ["PDAP", "LPDAP", "NLGCG"]
     styles = ["-", "-.", "--"]
-    colors = ["blue", "orange", "green"]
+    colors = ["tab:blue", "tab:orange", "tab:green"]
     for array, array_ste, name, style, color in zip(
         [pdap_residuals_mean, lpdap_residuals_mean, nlgcg_residuals_mean],
         [pdap_residuals_ste, lpdap_residuals_ste, nlgcg_residuals_ste],
@@ -799,7 +799,7 @@ def experiment():
         + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
         + [f"LPDAP, gridless"]
     )
-    colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
+    colors = ["tab:blue"] * len(sizes) + ["tab:green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
     residuals_flpdap_mean = [
         np.mean(
@@ -864,7 +864,7 @@ def experiment():
         + [f"Discretized LPDPA, {size}x{size} grid" for size in sizes]
         + [f"LPDAP, gridless"]
     )
-    colors = ["blue"] * len(sizes) + ["green"] * len(sizes) + ["black"]
+    colors = ["tab:blue"] * len(sizes) + ["tab:green"] * len(sizes) + ["black"]
     styles = ["-", "--", "-."] + ["-", "--", "-."] + ["-"]
     residuals_flpdap_mean = [
         np.mean(
